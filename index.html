@@ -1,0 +1,1563 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AFVer — Adobe File Version</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --row-alt: #2a2a2b;
+    --border: #3a3a3c;
+    --text: #e4e4e6;
+    --text-dim: #8a8a8e;
+    --accent: #0a84ff;
+    --warning: #6b6b6e;
+    --mismatch: #ff453a;
+    --header-bg: #2d2d30;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f5f7;
+      --panel: #ffffff;
+      --row-alt: #f0f0f2;
+      --border: #d8d8dc;
+      --text: #1d1d1f;
+      --text-dim: #86868b;
+      --accent: #0071e3;
+      --warning: #a0a0a4;
+      --mismatch: #d70015;
+      --header-bg: #ececee;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Hiragino Sans", sans-serif;
+    background: var(--bg); color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    background: var(--panel); flex-shrink: 0;
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .3px; }
+  header .sub { font-size: 11px; color: var(--text-dim); }
+  header .spacer { flex: 1; }
+  header button {
+    font-size: 12px; padding: 5px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    cursor: pointer; white-space: nowrap;
+  }
+  header button:hover:not(:disabled) { background: var(--header-bg); }
+  header button:disabled { opacity: .4; cursor: default; }
+
+  #main { flex: 1; position: relative; overflow: auto; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--header-bg); text-align: left;
+    padding: 7px 12px; font-weight: 600; font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  thead th .arrow { color: var(--text-dim); font-size: 10px; margin-left: 4px; }
+  tbody td { padding: 6px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; max-width: 0; }
+  tbody tr:nth-child(even) { background: var(--row-alt); }
+  tbody tr.dim td { color: var(--warning); }
+  tbody tr td.mismatch { color: var(--mismatch); }
+  td.col-name { width: 45%; }
+  td.col-ver  { width: 22%; }
+  td.col-kind { width: 33%; }
+  .badge {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    margin-right: 6px; vertical-align: middle; font-weight: 600;
+  }
+  .badge.ai { background: #ff7a00; color: #1a1a00; }
+  .badge.id { background: #ff2d92; color: #ffffff; }
+  .badge.ps { background: #1f8fff; color: #ffffff; }
+  .badge.pdf { background: #e2231a; color: #ffffff; }
+  .badge.none { background: var(--border); color: var(--text-dim); }
+
+  tbody tr.dir { cursor: pointer; user-select: none; }
+  tbody tr.dir:hover td { background: var(--header-bg); }
+  tbody tr.dir td.col-name { font-weight: 600; }
+  .tw { display: inline-block; width: 14px; text-align: center; color: var(--text-dim); font-size: 10px; }
+  .folder-icon { margin-right: 5px; }
+  .fcount { color: var(--text-dim); font-size: 11px; }
+
+  #placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim); font-size: 14px; pointer-events: none; text-align: center; padding: 20px;
+  }
+  #placeholder small { display:block; margin-top: 8px; font-size: 12px; opacity: .8; }
+
+  #drop-overlay {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(10,132,255,.08);
+    border: 3px dashed var(--accent); border-radius: 12px; margin: 8px;
+    font-size: 18px; color: var(--accent); font-weight: 600; pointer-events: none;
+  }
+  body.dragover #drop-overlay { display: flex; }
+
+  footer {
+    padding: 6px 16px; font-size: 11px; color: var(--text-dim);
+    border-top: 1px solid var(--border); background: var(--panel); flex-shrink: 0;
+    display: flex; gap: 16px;
+  }
+
+  /* 「開く」メニュー */
+  .menu-wrap { position: relative; display: inline-block; }
+  .menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.25); padding: 4px; min-width: 170px;
+  }
+  .menu[hidden] { display: none; }
+  .menu button {
+    display: block; width: 100%; text-align: left; border: none; background: none;
+    color: var(--text); padding: 7px 10px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  .menu button:hover { background: var(--header-bg); }
+
+  .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #print-title { display: none; }
+
+  #notice {
+    padding: 8px 16px; font-size: 12px; line-height: 1.55; flex-shrink: 0;
+    background: #4a3a00; color: #ffd479; border-bottom: 1px solid var(--border);
+  }
+  #notice[hidden] { display: none; }
+  @media (prefers-color-scheme: light) { #notice { background: #fff3cd; color: #7a5c00; } }
+  @media print { #notice { display: none !important; } }
+
+  @media print {
+    header, footer, #drop-overlay, #placeholder { display: none !important; }
+    body { height: auto; overflow: visible; background: #fff; color: #000; }
+    #main { overflow: visible; }
+    thead th { cursor: default; background: #ececec !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tbody tr.dir td { background: #f3f3f3 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tbody tr:nth-child(even) { background: #fafafa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    tbody tr.dim td { color: #888 !important; -webkit-print-color-adjust: exact; }
+    #print-title { display: block !important; padding: 4px 0 12px; }
+    #print-title h2 { margin: 0 0 2px; font-size: 16px; }
+    #print-title .pt-date { font-size: 11px; color: #555; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>AFVer</h1>
+  <span class="sub">Illustrator / InDesign ファイルの作成バージョンを判定</span>
+  <span class="spacer"></span>
+  <div class="menu-wrap">
+    <button id="btn-open">開く…</button>
+    <div id="open-menu" class="menu" hidden>
+      <button id="mi-file">ファイルを選択…</button>
+      <button id="mi-folder">フォルダを選択…</button>
+    </div>
+  </div>
+  <button id="btn-expand" disabled>全て展開</button>
+  <button id="btn-collapse" disabled>全て折りたたむ</button>
+  <button id="btn-print" disabled>印刷 / PDF</button>
+  <button id="btn-clear" disabled>クリア</button>
+</header>
+
+<div id="notice" hidden></div>
+
+<div id="main">
+  <div id="print-title"></div>
+  <table>
+    <thead>
+      <tr>
+        <th data-key="name">ファイル名<span class="arrow"></span></th>
+        <th data-key="ver">バージョン<span class="arrow"></span></th>
+        <th data-key="kind">種類<span class="arrow"></span></th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div id="placeholder">
+    ここにファイルやフォルダをドロップ
+    <small>.ai / .ait / .eps / .pdf / .indd / .indt / .indb / .indl / .idml</small>
+  </div>
+</div>
+
+<footer>
+  <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
+  <span class="spacer" style="flex:1"></span>
+  <span id="count"></span>
+</footer>
+
+<div id="drop-overlay">ドロップして判定</div>
+
+<input type="file" id="file-input" multiple style="display:none"
+       accept=".ai,.ait,.eps,.pdf,.psd,.indd,.indt,.indb,.indl,.idml">
+<input type="file" id="folder-input" webkitdirectory multiple style="display:none">
+
+<script>
+"use strict";
+
+/* ============================================================================
+ * AFVer — File Ver Ai / File Ver Id 統合 Web版
+ *   Swift 版（FileParser.swift 両アプリ）のロジックを忠実に移植。
+ *   外部ライブラリ不使用。zlib/ZIP 展開はブラウザ標準 DecompressionStream を使用。
+ *   macOS の Finder Info（xattr）はブラウザで取得不可のためコンテンツ判定のみ。
+ * ==========================================================================*/
+
+/* ---------------------------------------------------------------------------
+ * バイト列ユーティリティ
+ * -------------------------------------------------------------------------*/
+
+// ASCII/Latin1 文字列を Uint8Array に（マーカー定義用）
+function b(str) { return Uint8Array.from(str, c => c.charCodeAt(0) & 0xff); }
+
+// data[start, end) を Latin1 文字列にデコード（バイト⇔charCode 1:1、ASCII領域は厳密一致）
+function latin1(data, start = 0, end = data.length) {
+  if (start < 0) start = 0;
+  if (end > data.length) end = data.length;
+  let s = ""; const CH = 8192;
+  for (let i = start; i < end; i += CH) {
+    s += String.fromCharCode.apply(null, data.subarray(i, Math.min(end, i + CH)));
+  }
+  return s;
+}
+
+// data[start, end) を UTF-8 でデコード（不正時は Latin1 にフォールバック）
+const _utf8Strict = new TextDecoder("utf-8", { fatal: true });
+function utf8(data, start, end) {
+  const sub = data.subarray(start, end);
+  try { return _utf8Strict.decode(sub); }
+  catch { return latin1(data, start, end); }
+}
+
+// needle(配列/Uint8Array) を data[start, limit) から検索。見つからなければ -1。
+function indexOf(data, needle, start = 0, limit = data.length) {
+  const nlen = needle.length;
+  if (nlen === 0) return start;
+  const last = Math.min(limit, data.length) - nlen;
+  outer:
+  for (let i = start; i <= last; i++) {
+    for (let j = 0; j < nlen; j++) if (data[i + j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+function startsWith(data, pos, needle) {
+  if (pos + needle.length > data.length) return false;
+  for (let j = 0; j < needle.length; j++) if (data[pos + j] !== needle[j]) return false;
+  return true;
+}
+
+function arraysEqual(a, bb) {
+  if (a.length !== bb.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== bb[i]) return false;
+  return true;
+}
+
+function readU16LE(d, i) { return (d[i] | (d[i + 1] << 8)) >>> 0; }
+function readU32LE(d, i) { return (d[i] | (d[i + 1] << 8) | (d[i + 2] << 16) | (d[i + 3] << 24)) >>> 0; }
+
+function extOf(name) {
+  const i = name.lastIndexOf(".");
+  return i < 0 ? "" : name.slice(i + 1).toLowerCase();
+}
+
+/* ---------------------------------------------------------------------------
+ * zlib / deflate 展開（DecompressionStream）
+ *   raw=false → zlib (RFC1950, 'deflate')   raw=true → 生deflate ('deflate-raw')
+ * -------------------------------------------------------------------------*/
+async function inflate(bytes, raw) {
+  try {
+    const ds = new DecompressionStream(raw ? "deflate-raw" : "deflate");
+    const writer = ds.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const reader = ds.readable.getReader();
+    const chunks = []; let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); total += value.length;
+    }
+    const out = new Uint8Array(total); let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* ===========================================================================
+ *  Illustrator / Photoshop パーサー（File Ver Ai 移植）
+ * ==========================================================================*/
+
+const Ai = (() => {
+  const markerCreator = b("%%Creator: ");
+  const markerAI8     = b("%%AI8_CreatorVersion: ");
+  const markerBeginData = b("%%BeginData:");
+
+  // --- 種別判定の補助 ---
+
+  function isPDFBased(data) {
+    return startsWith(data, 0, b("%PDF-"));
+  }
+  function isAIPDFFormat(data) { // Illustrator編集機能保持PDF（.ai偽装検出）
+    return indexOf(data, b("/AIPDFPrivateData"), 0, Math.min(data.length, 65536)) >= 0;
+  }
+  function isIllustratorTemplateFormat(data) { // 本物の .ait か
+    return indexOf(data, b("application/vnd.adobe.illustrator"), 0, Math.min(data.length, 2048)) >= 0;
+  }
+
+  // バイナリEPS（C5 D0 D3 C6）はPS部分へシークして、その先頭を返す
+  function epsReadPSHeader(data, length) {
+    let base = 0;
+    if (data.length >= 8 && data[0] === 0xC5 && data[1] === 0xD0 && data[2] === 0xD3 && data[3] === 0xC6) {
+      base = (data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24)) >>> 0;
+    }
+    return latin1(data, base, Math.min(data.length, base + length));
+  }
+  function epsIsPhotoshop(data) {
+    return epsReadPSHeader(data, 16384).includes("%%Creator: Adobe Photoshop");
+  }
+  function isPhotoshopFile(data, kind) {
+    if (kind === "PSD") return true;
+    if (kind === "EPS") return epsIsPhotoshop(data);
+    return false;
+  }
+
+  // --- ファイル種別（拡張子非依存・コンテンツベース） ---
+  function getFileKind(fc, data, pdfXref) {
+    // A. PDF構造
+    if (isPDFBased(data)) {
+      if (isAIPDFFormat(data)) { fc.isIllustratorFile = true; return "PDF"; }
+      let metaN = pdfXref ? traverseToAIMetaDataObj(data, pdfXref.root, pdfXref.offsets) : null;
+      if (metaN != null) {
+        fc.isIllustratorFile = true;
+        fc.isTemplate = isIllustratorTemplateFormat(data);
+        return "Ai";
+      }
+      // xref ストリーム形式等で xref を辿れない場合の前方探索フォールバック
+      if (indexOf(data, b("/AIMetaData"), 0, data.length) >= 0) {
+        fc.isIllustratorFile = true;
+        fc.isTemplate = isIllustratorTemplateFormat(data);
+        return "Ai";
+      }
+      return "PDF";
+    }
+    // B. PostScript
+    const ps = epsReadPSHeader(data, 16384);
+    const firstLine = ps.split(/\r|\n/)[0] || "";
+    if (firstLine.includes("%!PS-Adobe-")) {
+      const isIll = ps.includes("%%AI8_CreatorVersion:")
+        || ps.includes("%%Creator: Adobe Illustrator")
+        || ps.includes("%%Creator: (Adobe Illustrator");
+      if (firstLine.includes("EPSF-")) { fc.isIllustratorFile = isIll; return "EPS"; }
+      if (isIll) { fc.isIllustratorFile = true; return "Ai"; }
+    }
+    // C. PSD ネイティブ（8BPS）
+    if (data.length >= 4 && data[0] === 0x38 && data[1] === 0x42 && data[2] === 0x50 && data[3] === 0x53) {
+      return "PSD";
+    }
+    return "";
+  }
+
+  // --- XMP CreatorTool 抽出 ---
+  function extractCreatorTool(data, start, end) {
+    const k1 = b("<xmp:CreatorTool>");
+    let idx = indexOf(data, k1, start, end);
+    if (idx >= 0) {
+      const s = idx + k1.length, lim = Math.min(end, s + 200);
+      let e = s; while (e < lim && data[e] !== 0x3C /*<*/) e++;
+      return latin1(data, s, e).trim();
+    }
+    const k2 = b('xmp:CreatorTool="');
+    idx = indexOf(data, k2, start, end);
+    if (idx >= 0) {
+      const s = idx + k2.length, lim = Math.min(end, s + 200);
+      let e = s; while (e < lim && data[e] !== 0x22 /*"*/) e++;
+      return latin1(data, s, e).trim();
+    }
+    return "";
+  }
+  function getCreatorTool(data) { // 非PDF・非ai/ait 用：先頭最大50MB走査
+    const limit = Math.min(data.length, 50 * 1024 * 1024);
+    return extractCreatorTool(data, 0, limit);
+  }
+
+  // --- PDF xref 解析 ---
+  function pdfObjRef(key, s) {
+    const m = s.match(new RegExp("/" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s+(\\d+)\\s+0\\s+R"));
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function pdfFirstKid(s) {
+    const m = s.match(/\/Kids\s*\[\s*(\d+)\s+0\s+R/);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function pdfIntVal(key, s) {
+    const m = s.match(new RegExp("/" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s+(\\d+)"));
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function pdfObjStr(data, offsets, num) {
+    const off = offsets[num]; if (off == null) return null;
+    const s = latin1(data, off, Math.min(data.length, off + 4096));
+    return s.startsWith(num + " 0 obj") ? s : null;
+  }
+
+  function parsePDFXref(data) {
+    const fileSize = data.length;
+    if (fileSize === 0) return null;
+    const tail = latin1(data, Math.max(0, fileSize - 1024), fileSize);
+    let xrefOff = null;
+    const lines = tail.split(/\r\n|\r|\n/).reverse();
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^\d+$/.test(t)) { xrefOff = parseInt(t, 10); break; }
+    }
+    if (xrefOff == null) return null;
+
+    const offsets = {};
+    let root = null;
+    const queue = [xrefOff];
+    const seen = new Set();
+
+    while (queue.length) {
+      const off = queue.shift();
+      if (seen.has(off)) continue;
+      seen.add(off);
+      if (off < 0 || off >= fileSize) continue;
+
+      // off から 'trailer' までを取り出す
+      const tIdx = indexOf(data, b("trailer"), off, fileSize);
+      const regionEnd = tIdx >= 0 ? Math.min(fileSize, tIdx + 2048) : Math.min(fileSize, off + 65536);
+      const s = latin1(data, off, regionEnd);
+      if (!s.startsWith("xref")) continue; // xref ストリーム形式は未対応
+
+      const sNorm = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const rows = sNorm.split("\n");
+      let p = 1; // "xref" 行をスキップ
+      outer:
+      while (p < rows.length) {
+        const l = rows[p++].trim();
+        if (l.startsWith("trailer")) break;
+        const parts = l.split(/\s+/).filter(Boolean);
+        if (parts.length !== 2) continue;
+        const secStart = parseInt(parts[0], 10), secCount = parseInt(parts[1], 10);
+        if (isNaN(secStart) || isNaN(secCount)) continue;
+        let objID = secStart;
+        for (let k = 0; k < secCount; k++) {
+          if (p >= rows.length) break outer;
+          const ep = rows[p++].trim().split(/\s+/).filter(Boolean);
+          if (ep.length >= 3 && ep[2] === "n") {
+            const fileOff = parseInt(ep[0], 10);
+            if (!isNaN(fileOff)) offsets[objID] = fileOff;
+          }
+          objID++;
+        }
+      }
+      const trailerPos = s.indexOf("trailer");
+      if (trailerPos >= 0) {
+        const ts = s.slice(trailerPos + "trailer".length);
+        if (root == null) root = pdfObjRef("Root", ts);
+        const prev = pdfIntVal("Prev", ts);
+        if (prev != null) queue.push(prev);
+      }
+    }
+    return root == null ? null : { root, offsets };
+  }
+
+  function traverseToAIMetaDataObj(data, root, offsets) {
+    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return null;
+    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return null;
+    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return null;
+    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return null;
+    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return null;
+    const illusN = pdfObjRef("Illustrator", pageStr); if (illusN == null) return null;
+    const illusStr = pdfObjStr(data, offsets, illusN); if (!illusStr) return null;
+    const privN = pdfObjRef("Private", illusStr); if (privN == null) return null;
+    const privStr = pdfObjStr(data, offsets, privN); if (!privStr) return null;
+    return pdfObjRef("AIMetaData", privStr);
+  }
+
+  async function readPDFObjStream(data, offsets, num) {
+    const off = offsets[num]; if (off == null) return null;
+    const header = latin1(data, off, Math.min(data.length, off + 8192));
+    const lm = header.match(/\/Length (\d+)/); if (!lm) return null;
+    const streamLen = parseInt(lm[1], 10); if (!(streamLen > 0)) return null;
+    const si = header.indexOf("stream"); if (si < 0) return null;
+    let rel = si + 6;
+    if (data[off + rel] === 0x0D) rel++;
+    if (data[off + rel] === 0x0A) rel++;
+    const bodyOff = off + rel;
+    if (bodyOff + streamLen > data.length) return null;
+    const raw = data.subarray(bodyOff, bodyOff + streamLen);
+    const hasFilter = header.slice(0, si).includes("/Filter");
+    return hasFilter ? await inflate(raw, false) : raw;
+  }
+
+  async function aiMetaDataStream(data, xref) {
+    const metaN = traverseToAIMetaDataObj(data, xref.root, xref.offsets);
+    if (metaN == null) return null;
+    return await readPDFObjStream(data, xref.offsets, metaN);
+  }
+
+  async function aiMetaDataStreamForward(data) {
+    const key = b("/AIMetaData ");
+    const kr = indexOf(data, key, 0, data.length); if (kr < 0) return null;
+    let i = kr + key.length;
+    let numStr = "";
+    while (i < data.length && data[i] >= 0x30 && data[i] <= 0x39) { numStr += String.fromCharCode(data[i]); i++; }
+    const objNum = parseInt(numStr, 10); if (isNaN(objNum)) return null;
+
+    const objMarker = b(objNum + " 0 obj");
+    const objRange = indexOf(data, objMarker, 0, data.length); if (objRange < 0) return null;
+    const start = objRange + objMarker.length;
+    const header = latin1(data, start, Math.min(data.length, start + 8192));
+    const lm = header.match(/\/Length (\d+)/); if (!lm) return null;
+    const streamLen = parseInt(lm[1], 10); if (!(streamLen > 0)) return null;
+    const si = header.indexOf("stream"); if (si < 0) return null;
+    let rel = si + 6;
+    if (data[start + rel] === 0x0D) rel++;
+    if (data[start + rel] === 0x0A) rel++;
+    const bodyOff = start + rel;
+    if (bodyOff + streamLen > data.length) return null;
+    const raw = data.subarray(bodyOff, bodyOff + streamLen);
+    const hasFilter = header.slice(0, si).includes("/Filter");
+    return hasFilter ? await inflate(raw, false) : raw;
+  }
+
+  function getCreatorToolViaXref(data, xref) {
+    const catStr = pdfObjStr(data, xref.offsets, xref.root); if (!catStr) return "";
+    const metaN = pdfObjRef("Metadata", catStr); if (metaN == null) return "";
+    const metaOff = xref.offsets[metaN]; if (metaOff == null) return "";
+    const header = latin1(data, metaOff, Math.min(data.length, metaOff + 512));
+    const lm = header.match(/\/Length (\d+)/); if (!lm) return "";
+    const totalLen = parseInt(lm[1], 10); if (!(totalLen > 0)) return "";
+    const si = header.indexOf("stream"); if (si < 0) return "";
+    let rel = si + 6;
+    if (data[metaOff + rel] === 0x0D) rel++;
+    if (data[metaOff + rel] === 0x0A) rel++;
+    const bodyOff = metaOff + rel;
+    const readLen = Math.min(totalLen, 256 * 1024);
+    return extractCreatorTool(data, bodyOff, Math.min(data.length, bodyOff + readLen));
+  }
+
+  // --- 行解析 ---
+  function extractString(data, start, end) {
+    let s = utf8(data, start, end).trim();
+    if (s.startsWith("(") && s.endsWith(")")) s = s.slice(1, -1);
+    return s;
+  }
+  function illustratorMajorVersion(creator1) {
+    const m = creator1.match(/Illustrator[^ ]* ([.\d]+)/);
+    if (!m) return null;
+    const v = parseInt(m[1].split(".")[0], 10);
+    return isNaN(v) ? null : v;
+  }
+  function processLineData(data, start, end, fc) {
+    const lineLen = end - start;
+    if (lineLen <= 2) return;
+    if (!fc.creator1 && lineLen > markerCreator.length && startsWith(data, start, markerCreator)) {
+      fc.creator1 = extractString(data, start + markerCreator.length, end);
+    } else if (!fc.ai8CreatorVersion && lineLen > markerAI8.length && startsWith(data, start, markerAI8)) {
+      fc.ai8CreatorVersion = extractString(data, start + markerAI8.length, end);
+      if (fc.kind === "EPS" && fc.creator1) {
+        const ver = illustratorMajorVersion(fc.creator1);
+        if (ver != null && ver < 9) fc.hasCreator2 = false;
+      }
+    } else if (fc.kind === "EPS" && fc.creator1 && !fc.creator2
+      && lineLen > markerCreator.length && startsWith(data, start, markerCreator)) {
+      fc.creator2 = extractString(data, start + markerCreator.length, end);
+      fc.hasCreator2 = true;
+    }
+  }
+
+  // PDF（AIMetaData ストリーム）からのバージョンスキャン
+  async function scanVersionCommentsFromPDF(data, xref, fc) {
+    let stream = await aiMetaDataStream(data, xref);
+    if (!stream) stream = await aiMetaDataStreamForward(data);
+    if (!stream) return;
+    if (fc.kind !== "EPS" && fc.kind !== "PDF") fc.kind = "Ai";
+    const n = stream.length;
+    let i = 0;
+    while (i < n) {
+      let j = i;
+      while (j < n && stream[j] !== 0x0D && stream[j] !== 0x0A) j++;
+      processLineData(stream, i, j, fc);
+      if (fc.creator1 && fc.ai8CreatorVersion) { fc.hasCreator2 = false; return; }
+      let a = j + 1;
+      if (j < n && stream[j] === 0x0D && a < n && stream[a] === 0x0A) a++;
+      i = (a > i) ? a : i + 1;
+    }
+  }
+
+  function parseBeginDataByteCount(data, from, end) {
+    let i = from;
+    while (i < end && data[i] === 0x20) i++;
+    let n = 0, found = false;
+    while (i < end && data[i] >= 0x30 && data[i] <= 0x39) {
+      n = n * 10 + (data[i] - 0x30); found = true; i++;
+    }
+    return found ? n : 0;
+  }
+
+  // EPS・旧AI（非PDF構造）の逐次スキャン。%%BeginData: は指定バイト数だけスキップ。
+  function scanVersionComments(data, fc) {
+    const n = data.length;
+    const PCT = 0x25;
+    let i = 0;
+    while (i < n) {
+      if (fc.kind === "EPS" && fc.creator1 && fc.ai8CreatorVersion) break; // notDetectEPSCompatibleVer 相当
+
+      let j = i;
+      while (j < n && data[j] !== 0x0D && data[j] !== 0x0A) j++;
+      let after = j + 1;
+      if (j < n && data[j] === 0x0D && after < n && data[after] === 0x0A) after++;
+      const lineLen = j - i;
+
+      if (lineLen >= 2 && data[i] === PCT && data[i + 1] === PCT) {
+        if (startsWith(data, i, markerBeginData)) {
+          const skip = parseBeginDataByteCount(data, i + markerBeginData.length, j);
+          if (skip > 0) { i = after + skip; continue; }
+        }
+        processLineData(data, i, j, fc);
+        if (fc.kind === "Ai" && fc.creator1 && fc.ai8CreatorVersion) { fc.hasCreator2 = false; break; }
+        if (fc.kind === "EPS" && fc.creator1 && fc.creator2) break;
+        if (fc.kind === "EPS" && fc.creator1 && !fc.hasCreator2) break;
+      }
+      i = (after > i) ? after : i + 1;
+    }
+  }
+
+  // --- バージョン判定 ---
+  function versionNumberSuffix(s) {
+    const m = s.match(/[.\d]+$/);
+    return m ? m[0] : "";
+  }
+  function extractLegacyCreatorVersion(creator1) {
+    const m = creator1.match(/Illustrator[^ ]*\s+(\d+(?:\.\d+)?[A-Za-z]?)/);
+    return m ? m[1] : "";
+  }
+  function determineVersion(fc) {
+    const isLegacy = !fc.ai8CreatorVersion && !fc.creator2 && (fc.kind === "Ai" || fc.kind === "EPS");
+    fc.determineCreated = fc.ai8CreatorVersion;
+    if (fc.isIllustratorFile) {
+      if (isLegacy) {
+        fc.determineCreated = extractLegacyCreatorVersion(fc.creator1);
+        fc.determineSaved = "";
+      } else if (fc.kind === "EPS") {
+        fc.determineSaved = fc.hasCreator2 ? versionNumberSuffix(fc.creator2) : versionNumberSuffix(fc.creator1);
+      } else {
+        fc.determineSaved = versionNumberSuffix(fc.creator1);
+      }
+    }
+    const created = parseInt((fc.determineCreated.split(".")[0]) || "", 10) || 0;
+    const saved = parseInt((fc.determineSaved.split(".")[0]) || "", 10) || 0;
+    if (created >= 17 && created <= 23 && saved === 17) fc.isSavedLowerVersion = false;
+    else if (created >= 24 && saved === 24) fc.isSavedLowerVersion = false;
+    else if (created > 0 && saved > 0) fc.isSavedLowerVersion = (created !== saved);
+  }
+
+  function versionName(ver) {
+    const parts = ver.split(".");
+    const major = parseInt(parts[0], 10);
+    if (isNaN(major)) return ver;
+    let minor = 0, minorSuffix = "";
+    if (parts.length > 1) {
+      const raw = parts[1];
+      const dm = raw.match(/^\d+/);
+      minor = dm ? parseInt(dm[0], 10) : 0;
+      minorSuffix = dm ? raw.slice(dm[0].length) : raw;
+    }
+    switch (major) {
+      case 1: case 2: case 3: case 4: return parts[0];
+      case 5: return minorSuffix === "" ? (minor > 0 ? "5." + minor : "5") : "5";
+      case 6: case 7: case 8: case 9: case 10: return parts[0];
+      case 11: return "CS";
+      case 12: return "CS2";
+      case 13: return "CS3";
+      case 14: return "CS4";
+      case 15: return minor > 0 ? "CS5." + minor : "CS5";
+      case 16: return "CS6";
+      case 17: return "CC";
+      case 18: return "CC 2014";
+      case 19: return "CC 2015";
+      case 20: return "CC 2015.3";
+      case 21: return "CC 2017";
+      case 22: return "CC 2018";
+      case 23: return "CC 2019";
+      default: return major > 23 ? String(major + 1996) : ver;
+    }
+  }
+
+  // --- エントリ ---
+  async function parse(name, data) {
+    const fc = {
+      kind: "", appName: "", isIllustratorFile: false, isTemplate: false,
+      xmpCreatorTool: "", creator1: "", creator2: "", ai8CreatorVersion: "",
+      hasCreator2: true, determineCreated: "", determineSaved: "", isSavedLowerVersion: false
+    };
+    const pdfXref = isPDFBased(data) ? parsePDFXref(data) : null;
+
+    fc.kind = getFileKind(fc, data, pdfXref);
+
+    if (!fc.isIllustratorFile) {
+      if (pdfXref) {
+        fc.xmpCreatorTool = getCreatorToolViaXref(data, pdfXref);
+      } else {
+        const ext = extOf(name);
+        if (ext !== "ai" && ext !== "ait") fc.xmpCreatorTool = getCreatorTool(data);
+      }
+    }
+    if (!fc.xmpCreatorTool) fc.xmpCreatorTool = "CreatorToolなし";
+
+    if (!fc.isIllustratorFile && !pdfXref && fc.xmpCreatorTool.includes("Illustrator")) {
+      if (fc.kind === "Ai" || fc.kind === "EPS") fc.isIllustratorFile = true;
+    }
+
+    if (fc.isIllustratorFile) {
+      if (pdfXref) await scanVersionCommentsFromPDF(data, pdfXref, fc);
+      else scanVersionComments(data, fc);
+      determineVersion(fc);
+    } else {
+      fc.hasCreator2 = false;
+    }
+
+    if (fc.isIllustratorFile) fc.appName = "Illustrator";
+    else if (isPhotoshopFile(data, fc.kind) || fc.xmpCreatorTool.includes("Photoshop")) fc.appName = "Photoshop";
+
+    return fc;
+  }
+
+  // 表示用バージョン文字列
+  function formatVersion(fc) {
+    if (!fc.isIllustratorFile || !fc.determineCreated) return "";
+    const alias = versionName(fc.determineCreated);
+    let text = alias + " (" + fc.determineCreated + ")";
+    text = text.replace(/\((\d+\.\d+\.\d+)(?:\.\d+)+\)/, "($1)");
+    return text;
+  }
+
+  return { parse, formatVersion };
+})();
+
+/* ===========================================================================
+ *  InDesign パーサー（File Ver Id 移植）
+ * ==========================================================================*/
+
+const Id = (() => {
+  const magic = new Uint8Array([
+    0x06, 0x06, 0xED, 0xF5, 0xD8, 0x1D, 0x46, 0xE5,
+    0xBD, 0x31, 0xEF, 0xE7, 0xFE, 0x74, 0xB7, 0x1D
+  ]);
+  const validFileTypes = new Set(["DOCUMENT", "BOOKBOOK", "LIBRARY4", "LIBRARY2"]);
+  const validExtensions = new Set([".indd", ".indb", ".indl", ".indt", ".idml"]);
+
+  function appName(major, minor) {
+    switch (major) {
+      case 3: return "CS";
+      case 4: return "CS2";
+      case 5: return "CS3";
+      case 6: return "CS4";
+      case 7: return minor >= 5 ? "CS5.5" : "CS5";
+      case 8: return "CS6";
+      case 9: return "CC";
+      case 10: return "CC 2014";
+      case 11: return "CC 2015";
+      case 12: return "CC 2017";
+      case 13: return "CC 2018";
+      case 14: return "CC 2019";
+      default: return major >= 15 ? String(major + 2005) : String(major);
+    }
+  }
+
+  function isBinaryHeader(data) {
+    return data.length >= 16 && arraysEqual(data.subarray(0, 16), magic);
+  }
+
+  // --- xref スキャン ---
+  function isDigit(byte) { return byte >= 0x30 && byte <= 0x39; }
+
+  function versionRange(data, dotAt, lo, hi) {
+    if (dotAt <= lo) return null;
+    let start = dotAt - 1;
+    while (start > lo && isDigit(data[start - 1])) start--;
+    if (!isDigit(data[start])) return null;
+    let pos = dotAt + 1, dots = 1;
+    while (pos < hi) {
+      if (isDigit(data[pos])) pos++;
+      else if (data[pos] === 0x2E && dots < 3) { dots++; pos++; }
+      else break;
+    }
+    if (dots !== 3 || pos <= dotAt + 1) return null;
+    if (!isDigit(data[pos - 1])) return null;
+
+    const offsetFromStart = start - lo;
+    const greedyLen = pos - start;
+    if (offsetFromStart >= 2) {
+      if (data[start - 1] === 0x40) {
+        const declared = data[start - 2];
+        if (declared >= 5 && declared <= 15 && declared <= greedyLen) return [start, start + declared];
+      } else if (data[start - 2] === 0x40) {
+        const declared = data[start - 1];
+        if (declared >= 5 && declared <= 15 && declared <= greedyLen) return [start, start + declared];
+      }
+    }
+    return [start, pos];
+  }
+
+  function readTS6(data, start, hi) {
+    let v = 0n;
+    for (let i = 0; i < 6; i++) {
+      const idx = start + i;
+      if (idx >= hi) break;
+      v |= BigInt(data[idx]) << BigInt(i * 8);
+    }
+    return v;
+  }
+  function hasSentinel(data, lo, hi) {
+    for (let i = lo; i < hi; i++) {
+      if (data[i] === 0x40 && i + 6 < hi) {
+        let allZero = true;
+        for (let k = 1; k <= 6; k++) if (data[i + k] !== 0) { allZero = false; break; }
+        if (allZero) return true;
+      }
+    }
+    return false;
+  }
+
+  function runXref(data, r) {
+    const blockSize = 0x1000;
+    const blockCount = Math.floor(data.length / blockSize);
+    if (blockCount <= 2) return;
+
+    const candidates = [];
+    for (let i = 0; i < blockCount; i++) {
+      const trailerStart = i * blockSize + 0xff0;
+      const bid = readU32LE(data, trailerStart + 4);
+      if (bid === 8 || bid === 9) candidates.push(i);
+    }
+
+    const prefix = (r.headerMajor <= 7 || r.headerMajor >= 14)
+      ? r.headerMajor + "." + r.headerMinor + "."
+      : r.headerMajor + ".";
+    const prefixBytes = b(prefix);
+
+    const sentinelHits = [], lastHits = [];
+
+    for (const i of candidates) {
+      const chunkStart = i * blockSize;
+      const chunkEnd = chunkStart + blockSize;
+      if (chunkEnd > data.length) continue;
+
+      let from = chunkStart;
+      while (true) {
+        const pos = indexOf(data, [0x2E], from, chunkEnd);
+        if (pos < 0) break;
+        const vr = versionRange(data, pos, chunkStart, chunkEnd);
+        if (vr && startsWith(data, vr[0], prefixBytes)) {
+          const ver = latin1(data, vr[0], vr[1]);
+          const globalOffset = vr[0];
+          const afterEnd = Math.min(vr[1] + 24, chunkEnd);
+          const ts6 = readTS6(data, vr[1], chunkEnd);
+          if (hasSentinel(data, vr[1], afterEnd)) sentinelHits.push({ globalOffset, ver, ts6 });
+          lastHits.push({ globalOffset, ver, ts6 });
+          from = vr[1];
+        } else {
+          from = pos + 1;
+        }
+      }
+    }
+
+    // ts32（バージョン直後 +2..+5 を LE u32）主キー、物理オフセット副キーで降順最大を採用
+    const pick = (arr) => {
+      let best = null;
+      for (const e of arr) {
+        if (best === null) { best = e; continue; }
+        const a32 = (e.ts6 >> 16n) & 0xFFFFFFFFn;
+        const b32 = (best.ts6 >> 16n) & 0xFFFFFFFFn;
+        let greater;
+        if (a32 !== b32) greater = a32 > b32;
+        else greater = e.globalOffset > best.globalOffset;
+        if (greater) best = e;
+      }
+      return best;
+    };
+
+    let chosen = pick(sentinelHits);
+    if (!chosen) chosen = pick(lastHits);
+    if (chosen) {
+      const parts = chosen.ver.split(".");
+      if (parts.length >= 2) {
+        const major = parseInt(parts[0], 10), minor = parseInt(parts[1], 10);
+        if (!isNaN(major) && !isNaN(minor)) {
+          r.xrefResult = "InDesign " + appName(major, minor) + " (" + chosen.ver + ")";
+        }
+      }
+    }
+  }
+
+  // --- ZIP（IDML）読み取り ---
+  function zipIndex(data) {
+    const sig = 0x06054b50;
+    let eocd = -1;
+    const minPos = Math.max(0, data.length - 65557 - 22);
+    for (let i = data.length - 22; i >= minPos; i--) {
+      if (i >= 0 && readU32LE(data, i) === sig) { eocd = i; break; }
+    }
+    if (eocd < 0) return null;
+    const cdCount = readU16LE(data, eocd + 10);
+    const cdOffset = readU32LE(data, eocd + 16);
+    if (cdOffset >= data.length) return null;
+
+    const entries = {};
+    let p = cdOffset;
+    for (let n = 0; n < cdCount; n++) {
+      if (p + 46 > data.length || readU32LE(data, p) !== 0x02014b50) break;
+      const method = readU16LE(data, p + 10);
+      const compSize = readU32LE(data, p + 20);
+      const fnLen = readU16LE(data, p + 28);
+      const extraLen = readU16LE(data, p + 30);
+      const commentLen = readU16LE(data, p + 32);
+      const localOff = readU32LE(data, p + 42);
+      const name = latin1(data, p + 46, p + 46 + fnLen);
+      entries[name] = { method, compSize, localOff };
+      p = p + 46 + fnLen + extraLen + commentLen;
+    }
+    return entries;
+  }
+
+  async function readZipEntry(data, e) {
+    const lo = e.localOff;
+    if (lo + 30 > data.length || readU32LE(data, lo) !== 0x04034b50) return null;
+    const fnLen = readU16LE(data, lo + 26);
+    const extraLen = readU16LE(data, lo + 28);
+    const dataStart = lo + 30 + fnLen + extraLen;
+    if (dataStart + e.compSize > data.length) return null;
+    const comp = data.subarray(dataStart, dataStart + e.compSize);
+    if (e.method === 0) return comp;
+    if (e.method === 8) return await inflate(comp, true);
+    return null;
+  }
+
+  async function isIDMLPackage(data, idx) {
+    const entries = idx || zipIndex(data);
+    if (!entries || !entries["mimetype"]) return false;
+    const raw = await readZipEntry(data, entries["mimetype"]);
+    if (!raw) return false;
+    const mime = utf8(raw, 0, raw.length).trim();
+    return mime === "application/vnd.adobe.indesign-idml-package";
+  }
+
+  async function parseIDML(name, data, idx, r) {
+    if (extOf(name) !== "idml") r.isExtMismatch = true;
+    const entries = idx || zipIndex(data);
+    if (!entries) { r.errorMessage = "IDMLファイルを開けませんでした"; return; }
+    const dm = entries["designmap.xml"];
+    if (!dm) { r.errorMessage = "designmap.xml が見つかりません"; return; }
+    const xml = await readZipEntry(data, dm);
+    if (!xml) { r.errorMessage = "designmap.xml を読み込めませんでした"; return; }
+
+    const head = utf8(xml, 0, Math.min(xml.length, 2048));
+    const pm = head.match(/product="([^"]+)"/);
+    const dmv = head.match(/DOMVersion="([^"]+)"/);
+    const product = pm ? pm[1] : "";
+    const dom = dmv ? dmv[1] : "";
+    if (!product) { r.errorMessage = "product 属性が見つかりません"; return; }
+
+    let mm = product;
+    const lp = product.indexOf("(");
+    if (lp >= 0) mm = product.slice(0, lp);
+    const mmParts = mm.split(".");
+    const major = parseInt(mmParts[0], 10) || 0;
+    const minor = mmParts.length >= 2 ? (parseInt(mmParts[1], 10) || 0) : 0;
+
+    r.isIDML = true;
+    r.contentKind = "idml";
+    r.isValid = true;
+    r.headerMajor = major;
+    r.headerMinor = minor;
+    r.idmlProduct = product;
+    r.idmlDOMVersion = dom;
+    r.idmlResult = "InDesign " + appName(major, minor) + " (" + major + "." + minor + ")";
+  }
+
+  // --- エントリ ---
+  async function parse(name, data) {
+    const r = {
+      isValid: false, errorMessage: "", headerMajor: 0, headerMinor: 0,
+      xrefResult: "", headerResult: "", contentKind: "", isExtMismatch: false,
+      isIDML: false, idmlProduct: "", idmlDOMVersion: "", idmlResult: ""
+    };
+    const ext = "." + extOf(name);
+
+    if (!isBinaryHeader(data)) {
+      const idx = zipIndex(data);
+      if (idx && await isIDMLPackage(data, idx)) { await parseIDML(name, data, idx, r); return r; }
+      if (!validExtensions.has(ext)) r.errorMessage = "対応していない拡張子です";
+      else if (data.length < 0x26) r.errorMessage = "ファイルが短すぎます";
+      else r.errorMessage = "InDesignファイルではありません";
+      return r;
+    }
+
+    const fileTypeStr = latin1(data, 0x10, 0x18);
+    if (!validFileTypes.has(fileTypeStr)) {
+      r.errorMessage = "未知のファイル種別: " + fileTypeStr;
+      return r;
+    }
+
+    switch (fileTypeStr) {
+      case "DOCUMENT":
+        r.contentKind = (ext === ".indt") ? "indt" : "indd";
+        if (ext !== ".indd" && ext !== ".indt") r.isExtMismatch = true;
+        break;
+      case "BOOKBOOK":
+        r.contentKind = "indb";
+        if (ext !== ".indb") r.isExtMismatch = true;
+        break;
+      case "LIBRARY4": case "LIBRARY2":
+        r.contentKind = "indl";
+        if (ext !== ".indl") r.isExtMismatch = true;
+        break;
+    }
+
+    const newFmt = arraysEqual(data.subarray(0x18, 0x1c), new Uint8Array([0x01, 0x70, 0x0F, 0x00]));
+    if (newFmt) { r.headerMajor = data[0x1d]; r.headerMinor = data[0x21]; }
+    else { r.headerMajor = data[0x20]; r.headerMinor = data[0x24]; }
+    r.isValid = true;
+
+    let hVer;
+    if (r.contentKind === "indl" && r.headerMajor >= 8 && r.headerMajor <= 13) hVer = String(r.headerMajor);
+    else hVer = r.headerMajor + "." + r.headerMinor;
+    r.headerResult = "InDesign " + appName(r.headerMajor, r.headerMinor) + " (" + hVer + ")";
+
+    runXref(data, r);
+    return r;
+  }
+
+  // 表示用バージョン文字列
+  function formatVersion(r) {
+    let v;
+    if (r.isValid) {
+      switch (r.contentKind) {
+        case "indd": case "indt": v = r.xrefResult || r.headerResult; break;
+        case "indb": case "indl": v = r.headerResult; break;
+        case "idml": v = r.idmlResult; break;
+        default: v = "";
+      }
+    } else {
+      v = r.errorMessage;
+    }
+    let t = v.startsWith("InDesign ") ? v.slice("InDesign ".length) : v;
+    t = t.replace(/\((\d+\.\d+\.\d+)(?:\.\d+)+\)/, "($1)");
+    return t;
+  }
+
+  function kindText(contentKind) {
+    switch (contentKind) {
+      case "indd": return "InDesign ドキュメント（.indd）";
+      case "indt": return "InDesign テンプレート（.indt）";
+      case "indl": return "InDesign ライブラリ（.indl）";
+      case "indb": return "InDesign ブック（.indb）";
+      case "idml": return "InDesign マークアップ（.idml）";
+      default: return "";
+    }
+  }
+
+  return { parse, formatVersion, kindText, isBinaryHeader, zipIndex, isIDMLPackage, validExtensions };
+})();
+
+/* ===========================================================================
+ *  Ai 表示用 種類テキスト
+ * ==========================================================================*/
+function aiKindText(fc) {
+  const isPhotoshop = (fc.appName === "Photoshop");
+  switch (fc.kind) {
+    case "PDF":
+      return fc.isIllustratorFile
+        ? "PDF（Illustrator編集機能あり）"
+        : "PDF（Illustrator編集機能なし）";
+    case "Ai":
+      return fc.isTemplate ? "Illustrator テンプレート形式（.ait）" : "Adobe Illustrator 形式（.ai）";
+    case "EPS":
+      if (fc.isIllustratorFile) return "Illustrator EPS 形式（.eps）";
+      if (isPhotoshop) return "Photoshop EPS 形式（.eps）";
+      return "不明";
+    case "PSD":
+      return "Photoshop 形式（.psd）";
+    default:
+      return "";
+  }
+}
+
+/* ===========================================================================
+ *  自動判別ディスパッチャ
+ * ==========================================================================*/
+const ID_EXTS = new Set(["indd", "indt", "indb", "indl", "idml"]);
+
+async function analyze(file) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  const name = file.name;
+  const ext = extOf(name);
+
+  // InDesign か（マジック / 拡張子 / IDML パッケージ）を先に判定
+  let isId = Id.isBinaryHeader(data) || ID_EXTS.has(ext);
+  let zi = null;
+  if (!isId) {
+    zi = Id.zipIndex(data);
+    if (zi && await Id.isIDMLPackage(data, zi)) isId = true;
+  }
+
+  if (isId) {
+    const r = await Id.parse(name, data);
+    const version = Id.formatVersion(r);
+    let kind = r.contentKind ? Id.kindText(r.contentKind) : "";
+    if (!kind && !r.isValid) kind = "—";
+    return {
+      name, version, kind,
+      app: r.isValid ? "id" : "none",
+      dim: !r.isValid || r.isExtMismatch,
+      mismatch: r.isExtMismatch
+    };
+  }
+
+  // Illustrator / Photoshop / その他
+  const fc = await Ai.parse(name, data);
+  const version = Ai.formatVersion(fc);
+  let kind = aiKindText(fc);
+  let app = "none";
+  if (fc.kind === "PDF") app = "pdf";              // 種類PDFは PDF アイコン（編集機能の有無を問わず）
+  else if (fc.appName === "Illustrator") app = "ai";
+  else if (fc.appName === "Photoshop") app = "ps";
+
+  // 拡張子偽装判定
+  let expected = [];
+  switch (fc.kind) {
+    case "Ai": expected = ["ai", "ait"]; break;
+    case "EPS": expected = ["eps"]; break;
+    case "PSD": expected = ["psd"]; break;
+    case "PDF": expected = ["pdf"]; break;
+  }
+  const mismatch = expected.length > 0 && ext !== "" && !expected.includes(ext);
+  // Illustrator編集機能なしPDF はグレーアウト（元アプリ準拠）
+  const warning = (fc.kind === "PDF" && !fc.isIllustratorFile);
+
+  if (!kind) kind = "対応していないファイル";
+
+  return {
+    name, version, kind, app,
+    // 拡張子偽装(mismatch)では行をグレーアウトしない（ファイル名・バージョンは通常色、種類のみ赤）
+    dim: warning || app === "none",
+    mismatch
+  };
+}
+
+/* ===========================================================================
+ *  UI（遅延ロード対応ツリー）
+ * ==========================================================================*/
+const tbody = document.getElementById("tbody");
+const placeholder = document.getElementById("placeholder");
+const countEl = document.getElementById("count");
+const btnOpen = document.getElementById("btn-open");
+const openMenu = document.getElementById("open-menu");
+const miFile = document.getElementById("mi-file");
+const miFolder = document.getElementById("mi-folder");
+const btnExpand = document.getElementById("btn-expand");
+const btnCollapse = document.getElementById("btn-collapse");
+const btnPrint = document.getElementById("btn-print");
+const btnClear = document.getElementById("btn-clear");
+const fileInput = document.getElementById("file-input");
+const folderInput = document.getElementById("folder-input");
+const printTitle = document.getElementById("print-title");
+const noticeEl = document.getElementById("notice");
+
+function showNotice(html) { noticeEl.innerHTML = html; noticeEl.hidden = false; }
+function hideNotice() { noticeEl.hidden = true; noticeEl.textContent = ""; }
+
+const SUPPORTED_EXTS = new Set(["ai", "ait", "eps", "pdf", "psd", "indd", "indt", "indb", "indl", "idml"]);
+const PLACEHOLDER_HTML = 'ここにファイルやフォルダをドロップ<small>.ai / .ait / .eps / .pdf / .indd / .indt / .indb / .indl / .idml</small>';
+function baseName(name) { const i = name.lastIndexOf("/"); return i < 0 ? name : name.slice(i + 1); }
+function isDotfile(name) { return baseName(name).startsWith("."); }
+
+const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: ['pdf', 'PDF'], none: ['none', '—'] };
+
+let rows = [];                 // フラット表示時のみ使用
+let treeMode = false;          // フォルダを含むとき true（階層ツリー）
+let treeRoot = null;           // ツリーのルートノード
+const expanded = new Set();    // 展開中フォルダの path 集合
+let sortState = { key: "name", asc: true };
+let analyzing = false, analyzedCount = 0;
+function startAnalyze() { analyzing = true; analyzedCount = 0; }
+function endAnalyze() { analyzing = false; }
+function bumpAnalyze() { analyzedCount++; if (analyzing) countEl.textContent = "解析中… " + analyzedCount + " 件"; }
+
+function errRow(name, e) {
+  return { name, version: e ? "解析エラー: " + ((e && e.message) || e) : "読み込めませんでした",
+           kind: "—", app: "none", dim: true, mismatch: false };
+}
+
+/* ---- 同時実行制限 ---- */
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  async function worker() { while (next < items.length) { const i = next++; await fn(items[i], i); } }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/* ---- ディレクトリ列挙アダプタ（FSA / 旧Entries を統一） ---- */
+function readAllEntries(reader) {
+  return new Promise(resolve => {
+    const all = [];
+    const step = () => reader.readEntries(
+      b => { if (!b.length) resolve(all); else { all.push(...b); step(); } },
+      () => resolve(all)
+    );
+    step();
+  });
+}
+function nodeFromFSAHandle(h, name) {
+  return h.kind === "directory"
+    ? { type: "dir", name, children: [], loaded: false, loading: false, list: () => listFSADir(h) }
+    : { type: "file", name, analyzed: false, row: null, strict: false, getFile: () => h.getFile() };
+}
+async function listFSADir(handle) {
+  const kids = [];
+  for await (const [name, h] of handle.entries()) kids.push(nodeFromFSAHandle(h, name));
+  return kids;
+}
+function nodeFromEntry(entry, name) {
+  return entry.isDirectory
+    ? { type: "dir", name, children: [], loaded: false, loading: false, list: () => listEntryDir(entry) }
+    : { type: "file", name, analyzed: false, row: null, strict: false,
+        getFile: () => new Promise(res => entry.file(res, () => res(null))) };
+}
+async function listEntryDir(entry) {
+  const es = await readAllEntries(entry.createReader());
+  return es.map(e => nodeFromEntry(e, e.name));
+}
+
+/* ---- ツリー操作（遅延ロード） ---- */
+function makeRoot() { return { type: "dir", name: "", path: "", parent: null, children: [], loaded: true, loading: false, list: null }; }
+
+// フォルダの直下一覧を取得して子ノードを構築（中身解析はしない）
+async function loadDir(node) {
+  if (node.loaded || !node.list) return;
+  let kids = [];
+  try { kids = await node.list(); } catch (e) { console.warn("一覧失敗:", node.path, e); }
+  node.children = [];
+  for (const k of kids) {
+    if (isDotfile(k.name)) continue;
+    k.parent = node;
+    k.path = node.path ? node.path + "/" + k.name : k.name;
+    if (k.type === "dir") { node.children.push(k); continue; }
+    const ext = extOf(k.name), supported = SUPPORTED_EXTS.has(ext);
+    if (!supported && ext !== "") continue;   // 拡張子付きの非対応 → 除外
+    k.strict = !supported;                     // 拡張子なしのみ true（Adobe形式と判定できた時のみ表示）
+    node.children.push(k);
+  }
+  node.loaded = true;
+}
+
+// フォルダ直下の未解析ファイルを解析し、判定不能な拡張子なしファイルを除外
+async function ensureFolderAnalyzed(node) {
+  const pending = node.children.filter(c => c.type === "file" && !c.analyzed);
+  if (pending.length) {
+    await mapLimit(pending, 8, async (fn) => {
+      let r;
+      try { const file = await fn.getFile(); r = file ? await analyze(file) : errRow(baseName(fn.path)); }
+      catch (e) { r = errRow(baseName(fn.path), e); }
+      r.name = fn.path; fn.row = r; fn.analyzed = true; bumpAnalyze();
+    });
+  }
+  node.children = node.children.filter(c => !(c.type === "file" && c.strict && c.row && c.row.app === "none"));
+}
+
+async function expandDir(node) {
+  expanded.add(node.path);
+  if (!node.loaded) { node.loading = true; render(); await loadDir(node); node.loading = false; }
+  startAnalyze(); render();
+  await ensureFolderAnalyzed(node);
+  endAnalyze(); render();
+}
+
+async function walkExpand(node) {
+  if (node.type !== "dir") return;
+  if (!node.loaded) await loadDir(node);
+  await ensureFolderAnalyzed(node);
+  if (node !== treeRoot) expanded.add(node.path);
+  for (const c of [...node.children]) if (c.type === "dir") await walkExpand(c);
+}
+async function expandAll() {
+  if (!treeMode || !treeRoot) return;
+  startAnalyze(); render();
+  await walkExpand(treeRoot);
+  endAnalyze(); render();
+}
+
+/* ---- ツリー初期化（ドロップ / フォルダ選択。1階層目だけ展開） ---- */
+async function initTree(root) {
+  treeMode = true; treeRoot = root; rows = [];
+  expanded.clear(); hideNotice();
+  startAnalyze(); render();
+  await ensureFolderAnalyzed(root);                       // トップ直下のファイル
+  for (const c of [...root.children]) if (c.type === "dir") {
+    expanded.add(c.path);
+    if (!c.loaded) await loadDir(c);
+    await ensureFolderAnalyzed(c);
+  }
+  endAnalyze(); render();
+}
+async function startTreeFromTopNodes(rawTop) {
+  const root = makeRoot();
+  for (const k of rawTop) {
+    if (isDotfile(k.name)) continue;
+    k.parent = root; k.path = k.name;
+    if (k.type === "file") k.strict = false;              // トップレベルは拡張子不問
+    root.children.push(k);
+  }
+  await initTree(root);
+}
+// webkitdirectory のフラットな FileList（webkitRelativePath 付き）から木を構築（構造は即時・解析は遅延）
+function buildEagerTree(files) {
+  const root = makeRoot();
+  const index = new Map(); index.set("", root);
+  for (const file of files) {
+    const rel = file.webkitRelativePath || file.name;
+    const parts = rel.split("/");
+    if (parts.some(p => p.startsWith("."))) continue;     // 隠しフォルダ/ドットファイル除外
+    let parent = root, ppath = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      const dpath = ppath ? ppath + "/" + parts[i] : parts[i];
+      let d = index.get(dpath);
+      if (!d) {
+        d = { type: "dir", name: parts[i], path: dpath, parent, children: [], loaded: true, loading: false, list: null };
+        index.set(dpath, d); parent.children.push(d);
+      }
+      parent = d; ppath = dpath;
+    }
+    const fname = parts[parts.length - 1];
+    const ext = extOf(fname), supported = SUPPORTED_EXTS.has(ext);
+    if (!supported && ext !== "") continue;
+    parent.children.push({ type: "file", name: fname, path: ppath ? ppath + "/" + fname : fname,
+                           parent, analyzed: false, row: null, strict: !supported,
+                           getFile: () => Promise.resolve(file) });
+  }
+  return root;
+}
+
+/* ---- フラット解析（フォルダを含まないドロップ／ファイル選択） ---- */
+async function handleFiles(fileList) {
+  const files = Array.from(fileList).filter(f => f && f.size != null && !isDotfile(f.name));
+  if (!files.length) return;
+  treeMode = false; treeRoot = null; rows = []; hideNotice();
+  startAnalyze(); render();
+  const out = [];
+  await mapLimit(files, 8, async (f) => {
+    let r; try { r = await analyze(f); } catch (e) { r = errRow(f.name, e); }
+    bumpAnalyze(); out.push(r);
+  });
+  rows = out;
+  endAnalyze(); render();
+}
+
+/* ---- 並べ替え ---- */
+function versionSortKey(v) {
+  const m = v.match(/\((\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  return m ? [parseInt(m[1] || "0", 10), parseInt(m[2] || "0", 10), parseInt(m[3] || "0", 10)] : [0, 0, 0];
+}
+function cmpRow(a, b) {
+  const na = baseName(a.name), nb = baseName(b.name);
+  if (sortState.key === "ver") {
+    const va = versionSortKey(a.version), vb = versionSortKey(b.version);
+    return (va[0] - vb[0] || va[1] - vb[1] || va[2] - vb[2]) || na.localeCompare(nb, undefined, { numeric: true });
+  }
+  if (sortState.key === "kind") {
+    return a.kind.localeCompare(b.kind, "ja") || na.localeCompare(nb, undefined, { numeric: true });
+  }
+  return na.localeCompare(nb, undefined, { numeric: true });
+}
+function sortRows() { const dir = sortState.asc ? 1 : -1; rows.sort((a, b) => cmpRow(a, b) * dir); }
+function compareDirNodes(a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true }) * (sortState.asc ? 1 : -1); }
+function compareFileNodes(a, b) {
+  const ra = a.row || { name: a.path, version: "", kind: "" };
+  const rb = b.row || { name: b.path, version: "", kind: "" };
+  return cmpRow(ra, rb) * (sortState.asc ? 1 : -1);
+}
+
+/* ---- 描画 ---- */
+function makeFileRow(r, tree, depth) {
+  const tr = document.createElement("tr");
+  if (r.dim) tr.className = "dim";
+  const [bc, bt] = APP_BADGE[r.app] || APP_BADGE.none;
+  const tdName = document.createElement("td");
+  tdName.className = "col-name"; tdName.title = r.name;
+  if (tree) {
+    tdName.style.paddingLeft = (12 + depth * 16) + "px";
+    tdName.innerHTML = `<span class="tw"></span><span class="badge ${bc}">${bt}</span>`;
+    tdName.appendChild(document.createTextNode(baseName(r.name)));
+  } else {
+    tdName.innerHTML = `<span class="badge ${bc}">${bt}</span>`;
+    tdName.appendChild(document.createTextNode(r.name));
+  }
+  const tdVer = document.createElement("td");
+  tdVer.className = "col-ver";                          // バージョンは常に通常色
+  tdVer.textContent = r.version; tdVer.title = r.version;
+  const tdKind = document.createElement("td");
+  tdKind.className = "col-kind" + (r.mismatch ? " mismatch" : "");   // 種類のみ赤（拡張子偽装）
+  tdKind.textContent = r.kind;
+  tdKind.title = r.kind + (r.mismatch ? "（拡張子が内容と一致しません）" : "");
+  tr.append(tdName, tdVer, tdKind);
+  return tr;
+}
+function appendDirRow(node, depth, frag) {
+  const tr = document.createElement("tr"); tr.className = "dir";
+  const open = expanded.has(node.path);
+  const tdName = document.createElement("td"); tdName.className = "col-name";
+  tdName.style.paddingLeft = (12 + depth * 16) + "px";
+  tdName.innerHTML = `<span class="tw">${open ? "▼" : "▶"}</span><span class="folder-icon">📁</span>`;
+  tdName.appendChild(document.createTextNode(node.name));
+  const tdVer = document.createElement("td"); tdVer.className = "col-ver";
+  const tdKind = document.createElement("td"); tdKind.className = "col-kind";
+  if (node.loading) tdKind.innerHTML = `<span class="fcount">読み込み中…</span>`;
+  else if (node.loaded) tdKind.innerHTML = `<span class="fcount">${node.children.length} 項目</span>`;
+  tr.append(tdName, tdVer, tdKind);
+  tr.addEventListener("click", () => {
+    if (expanded.has(node.path)) { expanded.delete(node.path); render(); }
+    else expandDir(node);
+  });
+  frag.appendChild(tr);
+}
+function renderChildren(node, depth, frag) {
+  const dirs = node.children.filter(c => c.type === "dir").sort(compareDirNodes);
+  const files = node.children.filter(c => c.type === "file").sort(compareFileNodes);
+  for (const d of dirs) { appendDirRow(d, depth, frag); if (expanded.has(d.path)) renderChildren(d, depth + 1, frag); }
+  for (const f of files) frag.appendChild(makeFileRow(f.row || errRow(baseName(f.path)), true, depth));
+}
+function countAllFiles(node) { let n = 0; for (const c of node.children) n += c.type === "file" ? 1 : countAllFiles(c); return n; }
+
+function render() {
+  tbody.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  if (treeMode && treeRoot) renderChildren(treeRoot, 0, frag);
+  else { sortRows(); for (const r of rows) frag.appendChild(makeFileRow(r, false, 0)); }
+  tbody.appendChild(frag);
+
+  const total = (treeMode && treeRoot) ? countAllFiles(treeRoot) : rows.length;
+  const hasTree = treeMode && treeRoot && treeRoot.children.length > 0;
+  const hasContent = total > 0 || hasTree;
+  placeholder.style.display = (hasContent || analyzing) ? "none" : "flex";
+  btnPrint.disabled = !hasContent;
+  btnClear.disabled = !hasContent;
+  const hasDir = treeMode && treeRoot && treeRoot.children.some(c => c.type === "dir");
+  btnExpand.disabled = !hasDir;
+  btnCollapse.disabled = !hasDir;
+
+  if (analyzing) countEl.textContent = "解析中… " + analyzedCount + " 件";
+  else countEl.textContent = total ? total + " 件" : "";
+
+  document.querySelectorAll("thead th").forEach(th => {
+    const arrow = th.querySelector(".arrow");
+    arrow.textContent = th.dataset.key === sortState.key ? (sortState.asc ? "▲" : "▼") : "";
+  });
+}
+
+/* ---- 並べ替えヘッダ ---- */
+document.querySelectorAll("thead th").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (sortState.key === key) sortState.asc = !sortState.asc;
+    else { sortState.key = key; sortState.asc = true; }
+    render();
+  });
+});
+
+/* ---- ドラッグ＆ドロップ ---- */
+let dragDepth = 0;
+window.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; document.body.classList.add("dragover"); });
+window.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+window.addEventListener("dragleave", e => { e.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragover"); } });
+window.addEventListener("drop", async e => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragover");
+  const dt = e.dataTransfer; if (!dt) return;
+
+  // ハンドル/エントリは dt.files より先に同期取得する（DataTransfer は await 後に失効するため）。
+  // ※ 同一アイテムに getAsFileSystemHandle と webkitGetAsEntry を「両方」呼ぶと、Chrome では
+  //   FSA ハンドルの列挙が 0 件になることがある（実機ドロップで確認）。旧 Entries API は実機で
+  //   確実に中身を返すため Entries を優先し、各アイテムに対しては片方の取得関数だけを呼ぶ。
+  const handlePromises = [], entries = [];
+  if (dt.items && dt.items.length) {
+    for (let i = 0; i < dt.items.length; i++) {
+      const it = dt.items[i]; if (!it) continue;
+      if (typeof it.webkitGetAsEntry === "function") {
+        const en = it.webkitGetAsEntry(); if (en) entries.push(en);
+      } else if (typeof it.getAsFileSystemHandle === "function") {
+        handlePromises.push(it.getAsFileSystemHandle());
+      }
+    }
+  }
+  const fallbackFiles = dt.files ? Array.from(dt.files) : [];
+
+  let rawTop = [];
+  if (entries.length) {                                     // 方式A: 旧 Entries API（実機ドロップで確実）
+    rawTop = entries.map(en => nodeFromEntry(en, en.name));
+  } else if (handlePromises.length) {                       // 方式B: File System Access API（Entries 非対応ブラウザ）
+    const settled = await Promise.allSettled(handlePromises);
+    for (const s of settled) if (s.status === "fulfilled" && s.value) rawTop.push(nodeFromFSAHandle(s.value, s.value.name));
+  }
+
+  if (rawTop.length) {
+    if (rawTop.some(n => n.type === "dir")) {
+      await startTreeFromTopNodes(rawTop);
+      // file:// の Chrome 等ではフォルダの中身が読めず空になる（OS/ブラウザ制限）。
+      // フォルダを落としたのに1件も読めなかった場合だけ案内を出す（https/Safari では出ない）。
+      if (location.protocol === "file:" && treeRoot
+          && treeRoot.children.some(c => c.type === "dir") && countAllFiles(treeRoot) === 0) {
+        showNotice('⚠ <b>このページをダブルクリック（file://）で開いた Chrome / Edge では、フォルダのドラッグ＆ドロップに対応していません</b>（中身を 0 件として読み込みます）。'
+          + '「<b>開く…</b>」→「<b>フォルダを選択</b>」をお使いください。');
+      }
+      return;
+    }
+    const files = [];
+    for (const n of rawTop) { const f = await n.getFile(); if (f) files.push(f); }
+    handleFiles(files); return;
+  }
+  const files = fallbackFiles.filter(f => !(f.size === 0 && f.type === ""));   // ディレクトリ除外
+  if (files.length) handleFiles(files);
+});
+
+/* ---- 「開く」メニュー（ファイル / フォルダ） ---- */
+btnOpen.addEventListener("click", e => { e.stopPropagation(); openMenu.hidden = !openMenu.hidden; });
+openMenu.addEventListener("click", e => e.stopPropagation());
+document.addEventListener("click", () => { openMenu.hidden = true; });
+miFile.addEventListener("click", () => { openMenu.hidden = true; fileInput.click(); });
+miFolder.addEventListener("click", () => { openMenu.hidden = true; folderInput.click(); });
+fileInput.addEventListener("change", () => { if (fileInput.files.length) handleFiles(fileInput.files); fileInput.value = ""; });
+folderInput.addEventListener("change", () => { if (folderInput.files.length) initTree(buildEagerTree(Array.from(folderInput.files))); folderInput.value = ""; });
+
+/* ---- ツールバー ---- */
+btnExpand.addEventListener("click", expandAll);
+btnCollapse.addEventListener("click", () => { expanded.clear(); render(); });
+btnClear.addEventListener("click", () => {
+  rows = []; treeMode = false; treeRoot = null; expanded.clear(); hideNotice();
+  placeholder.innerHTML = PLACEHOLDER_HTML; render();
+});
+
+/* ---- 印刷 / PDF（現在の展開状態をそのまま出力） ---- */
+btnPrint.addEventListener("click", () => {
+  const d = new Date();
+  const ymd = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  printTitle.innerHTML = `<h2>AFVer — 作成バージョン一覧</h2><div class="pt-date">${ymd}</div>`;
+  window.print();
+});
+
+render();
+</script>
+</body>
+</html>
