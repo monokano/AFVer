@@ -85,6 +85,24 @@
   .badge.pdf { background: #e2231a; color: #ffffff; }
   .badge.none { background: var(--border); color: var(--text-dim); }
 
+  /* 書類（ファイル）アイコン表示：やや縦長の矩形タイル＋中央にアプリ略号 */
+  .ficon {
+    display: inline-flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: 14px; height: 18px;
+    margin-right: 6px; vertical-align: -2px; border-radius: 2px;
+    font-size: 8px; font-weight: 800; letter-spacing: -.3px; line-height: 1;
+    color: #ffffff;
+    position: relative; top: -2px;   /* アイコンを行内で2px上へ */
+  }
+  .ficon::after { content: attr(data-lbl); }
+  .ficon.ai  { background: #330000; color: #ffb84d; font-size: 10px; } /* Illustrator */
+  .ficon.id  { background: #330033; color: #ff6b8f; font-size: 10px; } /* InDesign */
+  .ficon.ps  { background: #001e36; color: #6cc4ff; font-size: 10px; } /* Photoshop */
+  .ficon.pdf { background: #ffffff; color: #e2231a; border: 1px solid #e2231a; font-size: 6px; } /* 白地・赤囲み・赤文字 */
+  .ficon.none{ background: #b0b0b0; }                                  /* 非対応・グレー */
+  /* ファイルアイコン表示時のみ、ファイル名を下げてアイコンと高さを揃える（アイコンと合わせて全体を2px上げ済み） */
+  #tbody.icons-file .fname { position: relative; top: 2px; }
+
   tbody tr.dir { cursor: pointer; user-select: none; }
   tbody tr.dir:hover td { background: var(--header-bg); }
   tbody tr.dir td.col-name { font-weight: 600; }
@@ -127,7 +145,7 @@
   }
   .menu button:hover { background: var(--header-bg); }
 
-  .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .badge, .ficon, .ficon::before, .ficon::after { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #print-title { display: none; }
 
   #notice {
@@ -164,6 +182,7 @@
       <button id="mi-folder">フォルダを選択…</button>
     </div>
   </div>
+  <button id="btn-iconstyle" title="アイコン表示を切り替え">アイコン: ファイル</button>
   <button id="btn-expand" disabled>全て展開</button>
   <button id="btn-collapse" disabled>全て折りたたむ</button>
   <button id="btn-print" disabled>印刷 / PDF</button>
@@ -1174,6 +1193,7 @@ const btnExpand = document.getElementById("btn-expand");
 const btnCollapse = document.getElementById("btn-collapse");
 const btnPrint = document.getElementById("btn-print");
 const btnClear = document.getElementById("btn-clear");
+const btnIconStyle = document.getElementById("btn-iconstyle");
 const fileInput = document.getElementById("file-input");
 const folderInput = document.getElementById("folder-input");
 const printTitle = document.getElementById("print-title");
@@ -1188,6 +1208,22 @@ function baseName(name) { const i = name.lastIndexOf("/"); return i < 0 ? name :
 function isDotfile(name) { return baseName(name).startsWith("."); }
 
 const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: ['pdf', 'PDF'], none: ['none', '—'] };
+
+// アイコン表示スタイル（"file"＝書類アイコン / "badge"＝従来バッジ）。選択は記憶。
+// ※ Chrome を file:// で開くと localStorage アクセスが例外を投げるため try/catch で保護する
+//   （ここで例外が漏れると以降の初期化＝ドロップ処理やボタン登録が止まる）。
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+let iconStyle = lsGet("afver-iconstyle") === "badge" ? "badge" : "file";
+function iconHTML(app) {
+  const [bc, bt] = APP_BADGE[app] || APP_BADGE.none;
+  return iconStyle === "badge"
+    ? `<span class="badge ${bc}">${bt}</span>`
+    : `<span class="ficon ${bc}" data-lbl="${bt}"></span>`;
+}
+function updateIconStyleBtn() {
+  btnIconStyle.textContent = "アイコン: " + (iconStyle === "badge" ? "バッジ" : "ファイル");
+}
 
 let rows = [];                 // フラット表示時のみ使用
 let treeMode = false;          // フォルダを含むとき true（階層ツリー）
@@ -1395,17 +1431,18 @@ function compareFileNodes(a, b) {
 function makeFileRow(r, tree, depth) {
   const tr = document.createElement("tr");
   if (r.dim) tr.className = "dim";
-  const [bc, bt] = APP_BADGE[r.app] || APP_BADGE.none;
   const tdName = document.createElement("td");
   tdName.className = "col-name"; tdName.title = r.name;
+  const nameEl = document.createElement("span"); nameEl.className = "fname";
   if (tree) {
     tdName.style.paddingLeft = (12 + depth * 16) + "px";
-    tdName.innerHTML = `<span class="tw"></span><span class="badge ${bc}">${bt}</span>`;
-    tdName.appendChild(document.createTextNode(baseName(r.name)));
+    tdName.innerHTML = `<span class="tw"></span>` + iconHTML(r.app);
+    nameEl.textContent = baseName(r.name);
   } else {
-    tdName.innerHTML = `<span class="badge ${bc}">${bt}</span>`;
-    tdName.appendChild(document.createTextNode(r.name));
+    tdName.innerHTML = iconHTML(r.app);
+    nameEl.textContent = r.name;
   }
+  tdName.appendChild(nameEl);
   const tdVer = document.createElement("td");
   tdVer.className = "col-ver";                          // バージョンは常に通常色
   tdVer.textContent = r.version; tdVer.title = r.version;
@@ -1443,6 +1480,7 @@ function renderChildren(node, depth, frag) {
 function countAllFiles(node) { let n = 0; for (const c of node.children) n += c.type === "file" ? 1 : countAllFiles(c); return n; }
 
 function render() {
+  tbody.classList.toggle("icons-file", iconStyle === "file");
   tbody.innerHTML = "";
   const frag = document.createDocumentFragment();
   if (treeMode && treeRoot) renderChildren(treeRoot, 0, frag);
@@ -1512,23 +1550,26 @@ window.addEventListener("drop", async e => {
     for (const s of settled) if (s.status === "fulfilled" && s.value) rawTop.push(nodeFromFSAHandle(s.value, s.value.name));
   }
 
-  if (rawTop.length) {
-    if (rawTop.some(n => n.type === "dir")) {
-      await startTreeFromTopNodes(rawTop);
-      // file:// の Chrome 等ではフォルダの中身が読めず空になる（OS/ブラウザ制限）。
-      // フォルダを落としたのに1件も読めなかった場合だけ案内を出す（https/Safari では出ない）。
-      if (location.protocol === "file:" && treeRoot
-          && treeRoot.children.some(c => c.type === "dir") && countAllFiles(treeRoot) === 0) {
-        showNotice('⚠ <b>このページをダブルクリック（file://）で開いた Chrome / Edge では、フォルダのドラッグ＆ドロップに対応していません</b>（中身を 0 件として読み込みます）。'
-          + '「<b>開く…</b>」→「<b>フォルダを選択</b>」をお使いください。');
-      }
-      return;
+  if (rawTop.some(n => n.type === "dir")) {
+    // ディレクトリを含む → 遅延ツリー（dt.files ではフォルダの中身を取得できないため Entries/FSA を使う）。
+    await startTreeFromTopNodes(rawTop);
+    // file:// の Chrome 等ではフォルダの中身が読めず空になる（OS/ブラウザ制限）。
+    // フォルダを落としたのに1件も読めなかった場合だけ案内を出す（https/Safari では出ない）。
+    if (location.protocol === "file:" && treeRoot
+        && treeRoot.children.some(c => c.type === "dir") && countAllFiles(treeRoot) === 0) {
+      showNotice('⚠ <b>このページをダブルクリック（file://）で開いた Chrome / Edge では、フォルダのドラッグ＆ドロップに対応していません</b>（中身を 0 件として読み込みます）。'
+        + '「<b>開く…</b>」→「<b>フォルダを選択</b>」をお使いください。');
     }
-    const files = [];
-    for (const n of rawTop) { const f = await n.getFile(); if (f) files.push(f); }
-    handleFiles(files); return;
+    return;
   }
-  const files = fallbackFiles.filter(f => !(f.size === 0 && f.type === ""));   // ディレクトリ除外
+
+  // ファイルのみ → dataTransfer.files を最優先で使う。
+  // ※ file:// の Chrome では Entries API の entry.file() が失敗する一方、dataTransfer.files は
+  //   ドロップされた「ファイル」については確実に取得できるため、こちらを使う（ディレクトリ=size0/type空は除外）。
+  let files = fallbackFiles.filter(f => !(f.size === 0 && f.type === ""));
+  if (!files.length && rawTop.length) {                       // dt.files が空のブラウザ向けの保険
+    for (const n of rawTop) { const f = await n.getFile(); if (f) files.push(f); }
+  }
   if (files.length) handleFiles(files);
 });
 
@@ -1542,6 +1583,12 @@ fileInput.addEventListener("change", () => { if (fileInput.files.length) handleF
 folderInput.addEventListener("change", () => { if (folderInput.files.length) initTree(buildEagerTree(Array.from(folderInput.files))); folderInput.value = ""; });
 
 /* ---- ツールバー ---- */
+btnIconStyle.addEventListener("click", () => {
+  iconStyle = iconStyle === "badge" ? "file" : "badge";
+  lsSet("afver-iconstyle", iconStyle);
+  updateIconStyleBtn(); render();
+});
+updateIconStyleBtn();
 btnExpand.addEventListener("click", expandAll);
 btnCollapse.addEventListener("click", () => { expanded.clear(); render(); });
 btnClear.addEventListener("click", () => {
