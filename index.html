@@ -79,11 +79,13 @@
     display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
     margin-right: 6px; vertical-align: middle; font-weight: 600;
   }
-  .badge.ai { background: #ff7a00; color: #1a1a00; }
-  .badge.id { background: #ff2d92; color: #ffffff; }
-  .badge.ps { background: #1f8fff; color: #ffffff; }
-  .badge.pdf { background: #e2231a; color: #ffffff; }
-  .badge.none { background: var(--border); color: var(--text-dim); }
+  .badge.ai     { background: #ff9a00; color: #1a1a00; }
+  .badge.id     { background: #ff2d92; color: #ffffff; }
+  .badge.ps     { background: #31a8ff; color: #ffffff; }
+  .badge.pdf    { background: #ffffff; color: #e2231a; border: 1px solid #e2231a; }
+  .badge.eps-ai { background: #ff9a00; color: #000000; } /* Illustrator EPS */
+  .badge.eps-ps { background: #31a8ff; color: #ffffff; } /* Photoshop EPS */
+  .badge.none   { background: var(--border); color: var(--text-dim); }
 
   /* 書類（ファイル）アイコン表示：やや縦長の矩形タイル＋中央にアプリ略号 */
   .ficon {
@@ -95,11 +97,15 @@
     position: relative; top: -2px;   /* アイコンを行内で2px上へ */
   }
   .ficon::after { content: attr(data-lbl); }
-  .ficon.ai  { background: #330000; color: #ffb84d; font-size: 10px; } /* Illustrator */
-  .ficon.id  { background: #330033; color: #ff6b8f; font-size: 10px; } /* InDesign */
-  .ficon.ps  { background: #001e36; color: #6cc4ff; font-size: 10px; } /* Photoshop */
-  .ficon.pdf { background: #ffffff; color: #e2231a; border: 1px solid #e2231a; font-size: 6px; } /* 白地・赤囲み・赤文字 */
-  .ficon.none{ background: #b0b0b0; }                                  /* 非対応・グレー */
+  .ficon.ai     { background: #330000; color: #ffb84d; font-size: 10px; } /* Illustrator */
+  .ficon.id     { background: #330033; color: #ff6b8f; font-size: 10px; } /* InDesign */
+  .ficon.ps     { background: #001e36; color: #6cc4ff; font-size: 10px; } /* Photoshop */
+  .ficon.pdf    { background: #ffffff; color: #e2231a; border: 1px solid #e2231a; font-size: 6px; } /* 白地・赤囲み・赤文字 */
+  .ficon.eps-ai { background: #ffffff; color: #444444; border: 1px solid #aaaaaa; font-size: 10px; } /* Illustrator EPS */
+  .ficon.eps-ps { background: #ffffff; color: #444444; border: 1px solid #aaaaaa; font-size: 10px; } /* Photoshop EPS */
+  .ficon.eps-ai::after { content: "Ai"; } /* data-lbl（"EPS"）を上書き */
+  .ficon.eps-ps::after { content: "Ps"; } /* data-lbl（"EPS"）を上書き */
+  .ficon.none   { background: #b0b0b0; }                                  /* 非対応・グレー */
   /* ファイルアイコン表示時のみ、ファイル名を下げてアイコンと高さを揃える（アイコンと合わせて全体を2px上げ済み） */
   #tbody.icons-file .fname { position: relative; top: 2px; }
 
@@ -213,7 +219,7 @@
   <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
   <span class="spacer" style="flex:1"></span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.1.1</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.2</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -1171,7 +1177,9 @@ async function analyze(file) {
   const version = Ai.formatVersion(fc);
   let kind = aiKindText(fc);
   let app = "none";
-  if (fc.kind === "PDF") app = "pdf";              // 種類PDFは PDF アイコン（編集機能の有無を問わず）
+  if (fc.kind === "PDF") app = "pdf";                          // 種類PDFは PDF アイコン（編集機能の有無を問わず）
+  else if (fc.kind === "EPS" && fc.appName === "Illustrator") app = "eps-ai"; // Illustrator EPS 専用アイコン
+  else if (fc.kind === "EPS" && fc.appName === "Photoshop")   app = "eps-ps"; // Photoshop EPS 専用アイコン
   else if (fc.appName === "Illustrator") app = "ai";
   else if (fc.appName === "Photoshop") app = "ps";
 
@@ -1225,7 +1233,8 @@ const PLACEHOLDER_HTML = 'ここにファイルやフォルダをドロップ<sm
 function baseName(name) { const i = name.lastIndexOf("/"); return i < 0 ? name : name.slice(i + 1); }
 function isDotfile(name) { return baseName(name).startsWith("."); }
 
-const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: ['pdf', 'PDF'], none: ['none', '—'] };
+const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: ['pdf', 'PDF'],
+                    'eps-ai': ['eps-ai', 'EPS'], 'eps-ps': ['eps-ps', 'EPS'], none: ['none', '—'] };
 
 // アイコン表示スタイル（"file"＝書類アイコン / "badge"＝従来バッジ）。選択は記憶。
 // ※ Chrome を file:// で開くと localStorage アクセスが例外を投げるため try/catch で保護する
