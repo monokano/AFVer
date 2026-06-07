@@ -219,13 +219,13 @@
   <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
   <span class="spacer" style="flex:1"></span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.2</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.3</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
 
 <input type="file" id="file-input" multiple style="display:none"
-       accept=".ai,.ait,.eps,.pdf,.psd,.indd,.indt,.indb,.indl,.idml">
+       accept=".ai,.ait,.eps,.pdf,.psd,.psb,.indd,.indt,.indb,.indl,.idml">
 <input type="file" id="folder-input" webkitdirectory multiple style="display:none">
 
 <script>
@@ -355,7 +355,7 @@ const Ai = (() => {
     return epsReadPSHeader(data, 16384).includes("%%Creator: Adobe Photoshop");
   }
   function isPhotoshopFile(data, kind) {
-    if (kind === "PSD") return true;
+    if (kind === "PSD" || kind === "PSB") return true;
     if (kind === "EPS") return epsIsPhotoshop(data);
     return false;
   }
@@ -377,6 +377,10 @@ const Ai = (() => {
         fc.isTemplate = isIllustratorTemplateFormat(data);
         return "Ai";
       }
+      // Photoshop編集機能保持PDF（Page→/PieceInfo→/AdobePhotoshop）
+      if (pdfXref && pdfPageHasAdobePhotoshop(data, pdfXref.root, pdfXref.offsets)) {
+        fc.isPhotoshopEditablePDF = true;
+      }
       return "PDF";
     }
     // B. PostScript
@@ -389,9 +393,10 @@ const Ai = (() => {
       if (firstLine.includes("EPSF-")) { fc.isIllustratorFile = isIll; return "EPS"; }
       if (isIll) { fc.isIllustratorFile = true; return "Ai"; }
     }
-    // C. PSD ネイティブ（8BPS）
+    // C. PSD/PSB ネイティブ（8BPS）。version(byte4-5, big-endian): 1=PSD / 2=PSB
     if (data.length >= 4 && data[0] === 0x38 && data[1] === 0x42 && data[2] === 0x50 && data[3] === 0x53) {
-      return "PSD";
+      const version = data.length >= 6 ? ((data[4] << 8) | data[5]) : 1;
+      return version === 2 ? "PSB" : "PSD";
     }
     return "";
   }
@@ -527,6 +532,35 @@ const Ai = (() => {
     const raw = data.subarray(bodyOff, bodyOff + streamLen);
     const hasFilter = header.slice(0, si).includes("/Filter");
     return hasFilter ? await inflate(raw, false) : raw;
+  }
+
+  // Page → /PieceInfo に /AdobePhotoshop があるか（Photoshop編集機能保持PDF判定）。
+  // Illustrator編集PDF（/PieceInfo/Illustrator）と同じ機構の Photoshop 版。
+  function pdfPageHasAdobePhotoshop(data, root, offsets) {
+    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return false;
+    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return false;
+    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return false;
+    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return false;
+    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return false;
+    return pageStr.includes("/AdobePhotoshop");
+  }
+
+  // Photoshop編集機能保持PDF の埋め込みデータから psVersion を取得する。
+  // Page → /PieceInfo /AdobePhotoshop << … /Private N 0 R >> → /StandardImageFileData（FlateDecode）→ cinf。
+  // /AdobePhotoshop はインライン辞書のため、その直後の /Private 参照を拾う。
+  async function psVersionFromPhotoshopPDF(data, root, offsets) {
+    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return "";
+    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return "";
+    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return "";
+    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return "";
+    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return "";
+    const ap = pageStr.indexOf("/AdobePhotoshop"); if (ap < 0) return "";
+    const afterAP = pageStr.slice(ap + "/AdobePhotoshop".length);
+    const privN = pdfObjRef("Private", afterAP); if (privN == null) return "";
+    const privStr = pdfObjStr(data, offsets, privN); if (!privStr) return "";
+    const dataN = pdfObjRef("StandardImageFileData", privStr); if (dataN == null) return "";
+    const inflated = await readPDFObjStream(data, offsets, dataN); if (!inflated) return "";
+    return parsePsVersionFromCinf(inflated);
   }
 
   async function aiMetaDataStream(data, xref) {
@@ -728,6 +762,7 @@ const Ai = (() => {
   async function parse(name, data) {
     const fc = {
       kind: "", appName: "", isIllustratorFile: false, isTemplate: false,
+      isPhotoshopEditablePDF: false,
       xmpCreatorTool: "", creator1: "", creator2: "", ai8CreatorVersion: "",
       hasCreator2: true, determineCreated: "", determineSaved: "", isSavedLowerVersion: false
     };
@@ -758,13 +793,127 @@ const Ai = (() => {
     }
 
     if (fc.isIllustratorFile) fc.appName = "Illustrator";
-    else if (isPhotoshopFile(data, fc.kind) || fc.xmpCreatorTool.includes("Photoshop")) fc.appName = "Photoshop";
+    else if (isPhotoshopFile(data, fc.kind) || fc.isPhotoshopEditablePDF || fc.xmpCreatorTool.includes("Photoshop")) fc.appName = "Photoshop";
+
+    // Photoshop編集機能保持PDF: 埋め込み StandardImageFileData の cinf からバージョン取得（表示専用）
+    if (fc.isPhotoshopEditablePDF && pdfXref) {
+      fc.psVersion = (await psVersionFromPhotoshopPDF(data, pdfXref.root, pdfXref.offsets)) || "";
+    }
 
     return fc;
   }
 
+  // --- Photoshop バージョン取得（表示専用） ---
+
+  // Photoshop の psVersion.major → 製品名/年。2020以降（major≥21）は「major + 1999」。
+  function psVersionName(ver) {
+    const parts = ver.split(".");
+    const major = parseInt(parts[0], 10);
+    if (isNaN(major)) return ver;
+    let minor = 0, minorSuffix = "";
+    if (parts.length > 1) {
+      const raw = parts[1];
+      const dm = raw.match(/^\d+/);
+      minor = dm ? parseInt(dm[0], 10) : 0;
+      minorSuffix = dm ? raw.slice(dm[0].length) : raw;
+    }
+    switch (major) {
+      case 1: case 2: case 3: case 4: return parts[0];
+      case 5: return minorSuffix === "" ? (minor > 0 ? "5." + minor : "5") : "5";
+      case 6: case 7: return parts[0];
+      case 8: return "CS";
+      case 9: return "CS2";
+      case 10: return "CS3";
+      case 11: return "CS4";
+      case 12: return minor > 0 ? "CS5." + minor : "CS5";
+      case 13: return "CS6";
+      case 14: return "CC";
+      case 15: return "CC 2014";
+      case 16: return "CC 2015";
+      case 17: return "CC 2015.5";
+      case 18: return "CC 2017";
+      case 19: return "CC 2018";
+      case 20: return "CC 2019";
+      default: return major > 20 ? String(major + 1999) : ver;
+    }
+  }
+
+  // PSD/PSB の cinf ブロックから psVersion を取得（file.slice でシーク・大容量でも数KBのみ読む）。
+  // ★長さフィールド幅は version ではなく署名で決まる（8BIM=4バイト / 8B64=8バイト）。
+  async function psVersionFromCinf(file) {
+    const read = async (off, n) => {
+      if (off < 0 || off + n > file.size) return null;
+      const buf = new Uint8Array(await file.slice(off, off + n).arrayBuffer());
+      return buf.length === n ? buf : null;
+    };
+    const be = (d) => { let v = 0; for (let i = 0; i < d.length; i++) v = v * 256 + d[i]; return v; };
+
+    const head = await read(0, 6);
+    if (!head || !(head[0] === 0x38 && head[1] === 0x42 && head[2] === 0x50 && head[3] === 0x53)) return "";
+    const isPSB = be(head.subarray(4, 6)) === 2;
+    const lenW = isPSB ? 8 : 4;
+
+    let o = 26, d;
+    d = await read(o, 4); if (!d) return ""; o += 4 + be(d);   // Color Mode Data
+    d = await read(o, 4); if (!d) return ""; o += 4 + be(d);   // Image Resources
+    d = await read(o, lenW); if (!d) return ""; const lmLen = be(d); o += lenW;  // Layer&Mask 長
+    if (lmLen <= 0) return "";
+    const lmEnd = o + lmLen;
+    d = await read(o, lenW); if (!d) return ""; o += lenW + be(d);  // Layer Info skip
+    if (o + 4 <= lmEnd) { d = await read(o, 4); if (d) o += 4 + be(d); }  // Global Layer Mask Info skip
+
+    while (o + 12 <= lmEnd) {
+      const sig = await read(o, 4); if (!sig) return "";
+      const is8BIM = sig[0] === 0x38 && sig[1] === 0x42 && sig[2] === 0x49 && sig[3] === 0x4D; // "8BIM"
+      const is8B64 = sig[0] === 0x38 && sig[1] === 0x42 && sig[2] === 0x36 && sig[3] === 0x34; // "8B64"
+      if (!is8BIM && !is8B64) { o += 1; continue; }
+      const keyD = await read(o + 4, 4); if (!keyD) return "";
+      const key = latin1(keyD, 0, 4);
+      const lw = is8B64 ? 8 : 4;                 // ★署名で長さ幅を判定
+      const lenD = await read(o + 8, lw); if (!lenD) return "";
+      const blockLen = be(lenD);
+      const dStart = o + 8 + lw;
+      if (key === "cinf") {
+        const cinf = await read(dStart, Math.min(blockLen, 65536));
+        return cinf ? parsePsVersionFromCinf(cinf) : "";
+      }
+      o = dStart + blockLen + (blockLen & 1);    // データ長を偶数に切り上げ
+    }
+    return "";
+  }
+
+  // cinf descriptor から psVersion(major.minor.fix) を抽出（Vrsn=1.3.0 は psVersion より前に出るため取り違えない）。
+  function parsePsVersionFromCinf(d) {
+    const needle = b("psVersion");
+    const r = indexOf(d, needle, 0, d.length);
+    if (r < 0) return "";
+    const after = r + needle.length;
+    function longAfter(key) {
+      const kb = b(key);
+      const j = indexOf(d, kb, after, d.length);
+      if (j < 0) return null;
+      const vs = j + kb.length + 4;              // key 直後の type(4B 'long') を飛ばす
+      if (vs + 4 > d.length) return null;
+      return (d[vs] << 24) | (d[vs + 1] << 16) | (d[vs + 2] << 8) | d[vs + 3];
+    }
+    const mj = longAfter("major"), mn = longAfter("minor"), fx = longAfter("fix");
+    if (mj == null || mn == null || fx == null) return "";
+    return mj + "." + mn + "." + fx;
+  }
+
+  // Photoshop EPS の PS ヘッダ（既読の先頭16KB）から %%Creator のバージョンを抽出（全体スキャン不要）。
+  function psVersionFromEPSCreator(data) {
+    const ps = epsReadPSHeader(data, 16384);
+    const m = ps.match(/%%Creator: Adobe Photoshop Version (\d+\.\d+\.\d+)/);
+    return m ? m[1] : "";
+  }
+
   // 表示用バージョン文字列
   function formatVersion(fc) {
+    // Photoshop（PSD/PSB/EPS）: cinf / %%Creator から得た psVersion を表示（例 "2025 (26.11.5)"）
+    if (fc.appName === "Photoshop") {
+      return fc.psVersion ? psVersionName(fc.psVersion) + " (" + fc.psVersion + ")" : "";
+    }
     if (!fc.isIllustratorFile || !fc.determineCreated) return "";
     const alias = versionName(fc.determineCreated);
     let text = alias + " (" + fc.determineCreated + ")";
@@ -772,7 +921,7 @@ const Ai = (() => {
     return text;
   }
 
-  return { parse, formatVersion };
+  return { parse, formatVersion, psVersionFromCinf, psVersionFromEPSCreator };
 })();
 
 /* ===========================================================================
@@ -1108,6 +1257,7 @@ function aiKindText(fc) {
   const isPhotoshop = (fc.appName === "Photoshop");
   switch (fc.kind) {
     case "PDF":
+      if (fc.isPhotoshopEditablePDF) return "PDF（Photoshop編集機能あり）";
       return fc.isIllustratorFile
         ? "PDF（Illustrator編集機能あり）"
         : "PDF（Illustrator編集機能なし）";
@@ -1119,6 +1269,8 @@ function aiKindText(fc) {
       return "不明";
     case "PSD":
       return "Photoshop 形式（.psd）";
+    case "PSB":
+      return "ビッグドキュメント形式（.psb）";
     default:
       return "";
   }
@@ -1148,7 +1300,20 @@ async function analyze(file) {
       (probe[0] === 0x50 && probe[1] === 0x4B) ||  // ZIP / IDML
       Id.isBinaryHeader(probe) ||                   // InDesign バイナリ
       ID_EXTS.has(ext);                             // InDesign 拡張子
-    data = needsFull ? new Uint8Array(await file.arrayBuffer()) : probe;
+    if (needsFull) {
+      data = new Uint8Array(await file.arrayBuffer());
+    } else if (probe[0] === 0xC5 && probe[1] === 0xD0 && probe[2] === 0xD3 && probe[3] === 0xC6) {
+      // DOS EPS（バイナリEPS）: PS本体がプレビュー(TIFF/WMF)の後ろにあり、
+      // 大きいプレビューだと PS 開始が 64KB プローブの外になる（例: PS_off≈100KB）。
+      // ヘッダの PS オフセット(LE 32bit)を見て、PSヘッダが外にあるときだけ [0, PS開始+64KB] を読む
+      // （%%Creator/%%AI8_CreatorVersion は PS 先頭付近にあるため）。全体読み込みは避ける。
+      const psOff = (probe[4] | (probe[5] << 8) | (probe[6] << 16) | (probe[7] << 24)) >>> 0;
+      data = (psOff + 16384 > PROBE_SIZE && psOff < file.size)
+        ? new Uint8Array(await file.slice(0, Math.min(psOff + PROBE_SIZE, file.size)).arrayBuffer())
+        : probe;
+    } else {
+      data = probe;
+    }
   }
 
   // InDesign か（マジック / 拡張子 / IDML パッケージ）を先に判定
@@ -1167,13 +1332,21 @@ async function analyze(file) {
     return {
       name, version, kind,
       app: r.isValid ? "id" : "none",
-      dim: !r.isValid || r.isExtMismatch,
+      // 無効な InDesign ファイルのみグレーアウト。拡張子偽装はグレーにせず種類のみ赤文字。
+      dim: !r.isValid,
       mismatch: r.isExtMismatch
     };
   }
 
   // Illustrator / Photoshop / その他
   const fc = await Ai.parse(name, data);
+
+  // Photoshop バージョン取得（表示専用）: PSD/PSB は file.slice でシーク、EPS は既読 data から
+  if (fc.appName === "Photoshop") {
+    if (fc.kind === "PSD" || fc.kind === "PSB") fc.psVersion = await Ai.psVersionFromCinf(file);
+    else if (fc.kind === "EPS") fc.psVersion = Ai.psVersionFromEPSCreator(data);
+  }
+
   const version = Ai.formatVersion(fc);
   let kind = aiKindText(fc);
   let app = "none";
@@ -1189,18 +1362,18 @@ async function analyze(file) {
     case "Ai": expected = ["ai", "ait"]; break;
     case "EPS": expected = ["eps"]; break;
     case "PSD": expected = ["psd"]; break;
+    case "PSB": expected = ["psb"]; break;
     case "PDF": expected = ["pdf"]; break;
   }
   const mismatch = expected.length > 0 && ext !== "" && !expected.includes(ext);
-  // Illustrator編集機能なしPDF はグレーアウト（元アプリ準拠）
-  const warning = (fc.kind === "PDF" && !fc.isIllustratorFile);
 
   if (!kind) kind = "対応していないファイル";
 
   return {
     name, version, kind, app,
-    // 拡張子偽装(mismatch)では行をグレーアウトしない（ファイル名・バージョンは通常色、種類のみ赤）
-    dim: warning || app === "none",
+    // グレーアウトは「対応していないファイル（app=none）」のみ。
+    // 編集機能なしPDFや拡張子偽装はグレーにせず、注意喚起は種類の赤文字(mismatch)で行う。
+    dim: app === "none",
     mismatch
   };
 }
@@ -1228,7 +1401,7 @@ const noticeEl = document.getElementById("notice");
 function showNotice(html) { noticeEl.innerHTML = html; noticeEl.hidden = false; }
 function hideNotice() { noticeEl.hidden = true; noticeEl.textContent = ""; }
 
-const SUPPORTED_EXTS = new Set(["ai", "ait", "eps", "pdf", "psd", "indd", "indt", "indb", "indl", "idml"]);
+const SUPPORTED_EXTS = new Set(["ai", "ait", "eps", "pdf", "psd", "psb", "indd", "indt", "indb", "indl", "idml"]);
 const PLACEHOLDER_HTML = 'ここにファイルやフォルダをドロップ<small>.ai / .ait / .eps / .pdf / .indd / .indt / .indb / .indl / .idml</small>';
 function baseName(name) { const i = name.lastIndexOf("/"); return i < 0 ? name : name.slice(i + 1); }
 function isDotfile(name) { return baseName(name).startsWith("."); }
