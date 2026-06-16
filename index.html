@@ -134,8 +134,18 @@
   footer {
     padding: 6px 16px; font-size: 11px; color: var(--text-dim);
     border-top: 1px solid var(--border); background: var(--panel); flex-shrink: 0;
-    display: flex; gap: 16px;
+    display: flex; gap: 16px; align-items: center;
   }
+  .detail-toggle { display: inline-flex; align-items: center; gap: 6px; }
+  .detail-toggle .seg-label { opacity: .7; }
+  .detail-toggle .seg-group { display: inline-flex; }
+  .detail-toggle .seg {
+    border: 1px solid var(--border); background: none; color: var(--text-dim);
+    font: inherit; font-size: 11px; line-height: 1.7; padding: 0 8px; cursor: pointer;
+  }
+  .detail-toggle .seg-group .seg:first-child { border-radius: 5px 0 0 5px; }
+  .detail-toggle .seg-group .seg:last-child { border-radius: 0 5px 5px 0; border-left: none; }
+  .detail-toggle .seg.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   /* 「開く」メニュー */
   .menu-wrap { position: relative; display: inline-block; }
@@ -218,8 +228,11 @@
 <footer>
   <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
   <span class="spacer" style="flex:1"></span>
+  <span class="detail-toggle" title="バージョン精度　詳細＝xref で詳細まで取得／簡易＝ヘッダのみ・(x.x) 表示">
+    <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
+  </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.4</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.5</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -361,7 +374,7 @@ const Ai = (() => {
   }
 
   // --- ファイル種別（拡張子非依存・コンテンツベース） ---
-  function getFileKind(fc, data, pdfXref) {
+  function getFileKind(fc, data, pdfXref, simple = false) {
     // A. PDF構造
     if (isPDFBased(data)) {
       if (isAIPDFFormat(data)) { fc.isIllustratorFile = true; return "PDF"; }
@@ -371,8 +384,8 @@ const Ai = (() => {
         fc.isTemplate = isIllustratorTemplateFormat(data);
         return "Ai";
       }
-      // xref ストリーム形式等で xref を辿れない場合の前方探索フォールバック
-      if (indexOf(data, b("/AIMetaData"), 0, data.length) >= 0) {
+      // xref ストリーム形式等で xref を辿れない場合の前方探索フォールバック（簡易では省略）
+      if (!simple && indexOf(data, b("/AIMetaData"), 0, data.length) >= 0) {
         fc.isIllustratorFile = true;
         fc.isTemplate = isIllustratorTemplateFormat(data);
         return "Ai";
@@ -439,7 +452,16 @@ const Ai = (() => {
   }
   function pdfObjStr(data, offsets, num) {
     const off = offsets[num]; if (off == null) return null;
-    const s = latin1(data, off, Math.min(data.length, off + 4096));
+    // 既定は 4KB 窓（小さな辞書はこれで完結）。最初の 4KB に endobj が無ければ巨大辞書
+    // （大量の Resources を持ち末尾に /PieceInfo<</Illustrator …>> が来る .ai 等）とみなし、
+    // endobj まで（上限 256KB）窓を広げて辞書全体を確実に含める（/PieceInfo 取りこぼし防止）。
+    let end = Math.min(data.length, off + 4096);
+    if (indexOf(data, b("endobj"), off, end) < 0) {
+      const cap = Math.min(data.length, off + 256 * 1024);
+      const e = indexOf(data, b("endobj"), off, cap);
+      end = e >= 0 ? Math.min(cap, e + 6) : cap;
+    }
+    const s = latin1(data, off, end);
     return s.startsWith(num + " 0 obj") ? s : null;
   }
 
@@ -641,9 +663,10 @@ const Ai = (() => {
   }
 
   // PDF（AIMetaData ストリーム）からのバージョンスキャン
-  async function scanVersionCommentsFromPDF(data, xref, fc) {
+  async function scanVersionCommentsFromPDF(data, xref, fc, simple = false) {
     let stream = await aiMetaDataStream(data, xref);
-    if (!stream) stream = await aiMetaDataStreamForward(data);
+    // 前方フォールバック（全体走査）は簡易では省略。xref で取れなければバージョン空で確定。
+    if (!stream && !simple) stream = await aiMetaDataStreamForward(data);
     if (!stream) return;
     if (fc.kind !== "EPS" && fc.kind !== "PDF") fc.kind = "Ai";
     const n = stream.length;
@@ -759,7 +782,7 @@ const Ai = (() => {
   }
 
   // --- エントリ ---
-  async function parse(name, data) {
+  async function parse(name, data, simple = false) {
     const fc = {
       kind: "", appName: "", isIllustratorFile: false, isTemplate: false,
       isPhotoshopEditablePDF: false,
@@ -768,7 +791,7 @@ const Ai = (() => {
     };
     const pdfXref = isPDFBased(data) ? parsePDFXref(data) : null;
 
-    fc.kind = getFileKind(fc, data, pdfXref);
+    fc.kind = getFileKind(fc, data, pdfXref, simple);
 
     if (!fc.isIllustratorFile) {
       if (pdfXref) {
@@ -785,7 +808,7 @@ const Ai = (() => {
     }
 
     if (fc.isIllustratorFile) {
-      if (pdfXref) await scanVersionCommentsFromPDF(data, pdfXref, fc);
+      if (pdfXref) await scanVersionCommentsFromPDF(data, pdfXref, fc, simple);
       else scanVersionComments(data, fc);
       determineVersion(fc);
     } else {
@@ -1166,7 +1189,7 @@ const Id = (() => {
   }
 
   // --- エントリ ---
-  async function parse(name, data) {
+  async function parse(name, data, headerOnly = false) {
     const r = {
       isValid: false, errorMessage: "", headerMajor: 0, headerMinor: 0,
       xrefResult: "", headerResult: "", contentKind: "", isExtMismatch: false,
@@ -1209,12 +1232,18 @@ const Id = (() => {
     else { r.headerMajor = data[0x20]; r.headerMinor = data[0x24]; }
     r.isValid = true;
 
-    let hVer;
-    if (r.contentKind === "indl" && r.headerMajor >= 8 && r.headerMajor <= 13) hVer = String(r.headerMajor);
-    else hVer = r.headerMajor + "." + r.headerMinor;
+    // major 8〜13（CS6〜CC2018）はヘッダ minor が更新バグで信頼できない。
+    //  ・indl：xref を持たないため常に major のみ
+    //  ・indd/indt：通常は xref で minor を確定するが、簡易（headerOnly）時は xref を引かないので
+    //    誤った minor を出さないよう major のみにする。それ以外の世代はヘッダ minor を信頼。
+    const unreliableMinor = r.headerMajor >= 8 && r.headerMajor <= 13;
+    const majorOnly = unreliableMinor && (r.contentKind === "indl"
+      || (headerOnly && (r.contentKind === "indd" || r.contentKind === "indt")));
+    const hVer = majorOnly ? String(r.headerMajor) : (r.headerMajor + "." + r.headerMinor);
     r.headerResult = "InDesign " + appName(r.headerMajor, r.headerMinor) + " (" + hVer + ")";
 
-    runXref(data, r);
+    // 簡易：ファイル全体読み込み＋xref 走査を行わず、ヘッダ結果のまま返す
+    if (!headerOnly) runXref(data, r);
     return r;
   }
 
@@ -1294,12 +1323,13 @@ async function analyze(file) {
     data = new Uint8Array(await file.arrayBuffer());
   } else {
     const probe = new Uint8Array(await file.slice(0, PROBE_SIZE).arrayBuffer());
-    // %PDF・ZIP(PK)・InDesignバイナリ は末尾（xref/EOCD）を参照するため全体が必要
+    // %PDF・ZIP(PK)・InDesignバイナリ は末尾（xref/EOCD）を参照するため全体が必要。
+    // ただし簡易モードのバイナリ InDesign は先頭ヘッダ（プローブ内）だけで判定するので全体読みしない。
+    const simpleMode = versionDetail === "simple";
     const needsFull =
       (probe[0] === 0x25 && probe[1] === 0x50 && probe[2] === 0x44 && probe[3] === 0x46) || // %PDF
       (probe[0] === 0x50 && probe[1] === 0x4B) ||  // ZIP / IDML
-      Id.isBinaryHeader(probe) ||                   // InDesign バイナリ
-      ID_EXTS.has(ext);                             // InDesign 拡張子
+      (!simpleMode && (Id.isBinaryHeader(probe) || ID_EXTS.has(ext)));  // InDesign（簡易はヘッダのみ）
     if (needsFull) {
       data = new Uint8Array(await file.arrayBuffer());
     } else if (probe[0] === 0xC5 && probe[1] === 0xD0 && probe[2] === 0xD3 && probe[3] === 0xC6) {
@@ -1325,8 +1355,9 @@ async function analyze(file) {
   }
 
   if (isId) {
-    const r = await Id.parse(name, data);
-    const version = Id.formatVersion(r);
+    const r = await Id.parse(name, data, versionDetail === "simple");
+    let version = Id.formatVersion(r);
+    if (versionDetail === "simple") version = truncateToMinor(version);
     let kind = r.contentKind ? Id.kindText(r.contentKind) : "";
     if (!kind && !r.isValid) kind = "—";
     return {
@@ -1339,7 +1370,7 @@ async function analyze(file) {
   }
 
   // Illustrator / Photoshop / その他
-  const fc = await Ai.parse(name, data);
+  const fc = await Ai.parse(name, data, versionDetail === "simple");
 
   // Photoshop バージョン取得（表示専用）: PSD/PSB は file.slice でシーク、EPS は既読 data から
   if (fc.appName === "Photoshop") {
@@ -1347,7 +1378,8 @@ async function analyze(file) {
     else if (fc.kind === "EPS") fc.psVersion = Ai.psVersionFromEPSCreator(data);
   }
 
-  const version = Ai.formatVersion(fc);
+  let version = Ai.formatVersion(fc);
+  if (versionDetail === "simple") version = truncateToMinor(version);
   let kind = aiKindText(fc);
   let app = "none";
   if (fc.kind === "PDF") app = "pdf";                          // 種類PDFは PDF アイコン（編集機能の有無を問わず）
@@ -1414,6 +1446,10 @@ const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: [
 //   （ここで例外が漏れると以降の初期化＝ドロップ処理やボタン登録が止まる）。
 function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+// 簡易モードの表示丸め：カッコ内 (major.minor.patch[.x]) を (major.minor) に丸める。
+// 既に2桁 (30.3) や major のみ (8) はマッチせず素通り。
+function truncateToMinor(text) { return text.replace(/\((\d+)\.(\d+)(?:\.\d+)+\)/, "($1.$2)"); }
 let iconStyle = lsGet("afver-iconstyle") === "badge" ? "badge" : "file";
 function iconHTML(app) {
   const [bc, bt] = APP_BADGE[app] || APP_BADGE.none;
@@ -1430,6 +1466,8 @@ let treeMode = false;          // フォルダを含むとき true（階層ツ�
 let treeRoot = null;           // ツリーのルートノード
 const expanded = new Set();    // 展開中フォルダの path 集合
 let sortState = { key: "name", asc: true };
+let versionDetail = "full";    // バージョン精度モード: "full"=詳細 / "simple"=簡易
+let lastFlatFiles = null;      // フラット表示の再解析（精度切替）用に元 File を保持
 let analyzing = false, analyzedCount = 0;
 function startAnalyze() { analyzing = true; analyzedCount = 0; }
 function endAnalyze() { analyzing = false; }
@@ -1592,6 +1630,7 @@ function buildEagerTree(files) {
 async function handleFiles(fileList) {
   const files = Array.from(fileList).filter(f => f && f.size != null && !isDotfile(f.name));
   if (!files.length) return;
+  lastFlatFiles = files;                                 // 精度切替時の再解析用
   treeMode = false; treeRoot = null; rows = []; hideNotice();
   startAnalyze(); render();
   const out = [];
@@ -1795,9 +1834,52 @@ updateIconStyleBtn();
 btnExpand.addEventListener("click", expandAll);
 btnCollapse.addEventListener("click", () => { expanded.clear(); render(); });
 btnClear.addEventListener("click", () => {
-  rows = []; treeMode = false; treeRoot = null; expanded.clear(); hideNotice();
+  rows = []; treeMode = false; treeRoot = null; lastFlatFiles = null; expanded.clear(); hideNotice();
   placeholder.innerHTML = PLACEHOLDER_HTML; render();
 });
+
+/* ---- バージョン精度モード（詳細 / 簡易） ---- */
+const segFull = document.getElementById("detail-full");
+const segSimple = document.getElementById("detail-simple");
+function updateDetailUI() {
+  if (segFull) segFull.classList.toggle("active", versionDetail === "full");
+  if (segSimple) segSimple.classList.toggle("active", versionDetail === "simple");
+}
+// 読み込み済み項目を新しい精度で再解析する（ツリーは展開中フォルダのみ＝遅延方針を維持）。
+async function reanalyzeAll() {
+  if (treeMode && treeRoot) {
+    const reset = (n) => { for (const c of (n.children || [])) { if (c.type === "file") { c.analyzed = false; c.row = null; } else reset(c); } };
+    reset(treeRoot);
+    startAnalyze(); render();
+    await ensureFolderAnalyzed(treeRoot);
+    const redo = async (n) => { for (const c of (n.children || [])) { if (c.type === "dir" && c.loaded && expanded.has(c.path)) { await ensureFolderAnalyzed(c); await redo(c); } } };
+    await redo(treeRoot);
+    endAnalyze(); render();
+  } else if (!treeMode && lastFlatFiles) {
+    await handleFiles(lastFlatFiles);
+  }
+}
+async function setVersionDetail(mode) {
+  const m = mode === "simple" ? "simple" : "full";
+  if (m === versionDetail) return;
+  versionDetail = m; lsSet("afver-detail", m); updateDetailUI();
+  await reanalyzeAll();
+}
+if (segFull) segFull.addEventListener("click", () => setVersionDetail("full"));
+if (segSimple) segSimple.addEventListener("click", () => setVersionDetail("simple"));
+// 初期モード決定：URL（?mode=simple / #simple、fast も可）> localStorage > 既定（詳細）
+(function initDetail() {
+  let m = null;
+  try {
+    const q = (new URLSearchParams(location.search).get("mode") || "").toLowerCase();
+    const h = (location.hash || "").replace("#", "").toLowerCase();
+    if (q === "simple" || q === "fast" || h === "simple" || h === "fast") m = "simple";
+    else if (q === "full" || q === "detail" || h === "full" || h === "detail") m = "full";
+  } catch (e) {}
+  if (!m) { const saved = lsGet("afver-detail"); if (saved === "simple" || saved === "full") m = saved; }
+  versionDetail = m || "full";
+  updateDetailUI();
+})();
 
 /* ---- 印刷 / PDF（現在の展開状態をそのまま出力） ---- */
 btnPrint.addEventListener("click", () => {
