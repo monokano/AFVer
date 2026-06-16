@@ -74,6 +74,11 @@
   tbody tr td.mismatch { color: var(--mismatch); }
   td.col-name { width: 45%; }
   td.col-ver  { width: 22%; }
+  .vdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .vdot.ai { background: #FF9A00; }   /* Illustrator */
+  .vdot.ps { background: #31A8FF; }   /* Photoshop */
+  .vdot.id { background: #FF3366; }   /* InDesign */
+  .vdot.pdf { background: #8a8f98; }  /* PDF（native data 有無に関わらずグレー） */
   td.col-kind { width: 33%; }
   .badge {
     display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
@@ -161,7 +166,7 @@
   }
   .menu button:hover { background: var(--header-bg); }
 
-  .badge, .ficon, .ficon::before, .ficon::after { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .badge, .ficon, .ficon::before, .ficon::after, .vdot { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   #print-title { display: none; }
 
   #notice {
@@ -1457,6 +1462,17 @@ function iconHTML(app) {
     ? `<span class="badge ${bc}">${bt}</span>`
     : `<span class="ficon ${bc}" data-lbl="${bt}"></span>`;
 }
+// 版数列 行頭のアプリ系統色ドット（File List Print の aiFamily 準拠）。app から系統を導出。
+// Illustrator=橙 / Photoshop=青 / InDesign=桃 / PDF=灰（native data 有無を問わず）。none は出さない。
+function verDotFamily(app) {
+  switch (app) {
+    case "ai": case "eps-ai": return "ai";
+    case "ps": case "eps-ps": return "ps";
+    case "id":  return "id";
+    case "pdf": return "pdf";
+    default:    return "";
+  }
+}
 function updateIconStyleBtn() {
   btnIconStyle.textContent = "アイコン: " + (iconStyle === "badge" ? "バッジ" : "ファイル");
 }
@@ -1684,7 +1700,10 @@ function makeFileRow(r, tree, depth) {
   tdName.appendChild(nameEl);
   const tdVer = document.createElement("td");
   tdVer.className = "col-ver";                          // バージョンは常に通常色
-  tdVer.textContent = r.version; tdVer.title = r.version;
+  const fam = verDotFamily(r.app);                      // 行頭にアプリ系統色のドット（対象ファイルのみ・版数空でも表示）
+  if (fam) { const dot = document.createElement("span"); dot.className = "vdot " + fam; tdVer.appendChild(dot); }
+  tdVer.appendChild(document.createTextNode(r.version));
+  tdVer.title = r.version;
   const tdKind = document.createElement("td");
   tdKind.className = "col-kind" + (r.mismatch ? " mismatch" : "");   // 種類のみ赤（拡張子偽装）
   tdKind.textContent = r.kind;
