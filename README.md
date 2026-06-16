@@ -1,4 +1,4 @@
-# AFVer — Adobe File Version
+# AFVer-Web — Adobe File Version
 
 Illustrator・Photoshop・InDesignのファイルをブラウザのウィンドウにドロップすると、**作成バージョン**を判定して一覧表示するWebアプリです。フォルダのドロップにも対応しています。
 

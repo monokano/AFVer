@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AFVer — Adobe File Version</title>
+<title>AFVer-Web — Adobe File Version</title>
 <style>
   :root {
     --bg: #1e1e1e;
@@ -178,7 +178,7 @@
 </head>
 <body>
 <header>
-  <h1>AFVer</h1>
+  <h1>AFVer-Web</h1>
   <span class="sub">Illustrator / InDesign ファイルの作成バージョンを判定</span>
   <span class="spacer"></span>
   <div class="menu-wrap">
@@ -219,7 +219,7 @@
   <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
   <span class="spacer" style="flex:1"></span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.3</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.4</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -232,7 +232,7 @@
 "use strict";
 
 /* ============================================================================
- * AFVer — File Ver Ai / File Ver Id 統合 Web版
+ * AFVer-Web — File Ver Ai / File Ver Id 統合 Web版
  *   Swift 版（FileParser.swift 両アプリ）のロジックを忠実に移植。
  *   外部ライブラリ不使用。zlib/ZIP 展開はブラウザ標準 DecompressionStream を使用。
  *   macOS の Finder Info（xattr）はブラウザで取得不可のためコンテンツ判定のみ。
@@ -1803,7 +1803,7 @@ btnClear.addEventListener("click", () => {
 btnPrint.addEventListener("click", () => {
   const d = new Date();
   const ymd = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-  printTitle.innerHTML = `<h2>AFVer — 作成バージョン一覧</h2><div class="pt-date">${ymd}</div>`;
+  printTitle.innerHTML = `<h2>AFVer-Web — 作成バージョン一覧</h2><div class="pt-date">${ymd}</div>`;
   window.print();
 });
 
