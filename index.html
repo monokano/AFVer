@@ -233,11 +233,11 @@
 <footer>
   <span>すべてブラウザ内で処理され、ファイルはどこにも送信されません。</span>
   <span class="spacer" style="flex:1"></span>
-  <span class="detail-toggle" title="バージョン精度　詳細＝xref で詳細まで取得／簡易＝ヘッダのみ・(x.x) 表示">
+  <span class="detail-toggle" title="詳細＝x.x.x ／ 簡易＝x.x">
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.5</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.6</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -383,21 +383,35 @@ const Ai = (() => {
     // A. PDF構造
     if (isPDFBased(data)) {
       if (isAIPDFFormat(data)) { fc.isIllustratorFile = true; return "PDF"; }
-      let metaN = pdfXref ? traverseToAIMetaDataObj(data, pdfXref.root, pdfXref.offsets) : null;
-      if (metaN != null) {
-        fc.isIllustratorFile = true;
-        fc.isTemplate = isIllustratorTemplateFormat(data);
-        return "Ai";
+      if (pdfXref) {
+        // Page[0] 辞書を解決（ObjStm 内の圧縮オブジェクトも辿る）。読めたら痕跡をその場で判定でき、
+        // 無ければ確定でプレーンPDF → プレーンPDFのたびの全走査（indexOf /AIMetaData）を回避。
+        const pageStr = firstPageDict(data, pdfXref.root, pdfXref.offsets, pdfXref.compressedObjs);
+        if (pageStr != null) {
+          // 通常の .ai 形式：Page → /PieceInfo /Illustrator → /Private → /AIMetaData
+          const illusN = pdfObjRef("Illustrator", pageStr);
+          if (illusN != null) {
+            const illusStr = pdfObjStr(data, pdfXref.offsets, illusN, pdfXref.compressedObjs);
+            const privN = illusStr ? pdfObjRef("Private", illusStr) : null;
+            const privStr = privN != null ? pdfObjStr(data, pdfXref.offsets, privN, pdfXref.compressedObjs) : null;
+            const metaN = privStr ? pdfObjRef("AIMetaData", privStr) : null;
+            if (metaN != null) {
+              fc.isIllustratorFile = true;
+              fc.isTemplate = isIllustratorTemplateFormat(data);
+              return "Ai";
+            }
+          }
+          // Photoshop編集機能保持PDF（Page → /PieceInfo /AdobePhotoshop）
+          if (pageStr.includes("/AdobePhotoshop")) { fc.isPhotoshopEditablePDF = true; return "PDF"; }
+          // Page 辞書を読めて Illustrator/Photoshop の痕跡なし → 確定でプレーンPDF（全走査しない）
+          return "PDF";
+        }
       }
-      // xref ストリーム形式等で xref を辿れない場合の前方探索フォールバック（簡易では省略）
+      // Page 辞書を構造的に読めなかったときだけの前方探索フォールバック（簡易では省略）。
       if (!simple && indexOf(data, b("/AIMetaData"), 0, data.length) >= 0) {
         fc.isIllustratorFile = true;
         fc.isTemplate = isIllustratorTemplateFormat(data);
         return "Ai";
-      }
-      // Photoshop編集機能保持PDF（Page→/PieceInfo→/AdobePhotoshop）
-      if (pdfXref && pdfPageHasAdobePhotoshop(data, pdfXref.root, pdfXref.offsets)) {
-        fc.isPhotoshopEditablePDF = true;
       }
       return "PDF";
     }
@@ -455,22 +469,141 @@ const Ai = (() => {
     const m = s.match(new RegExp("/" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s+(\\d+)"));
     return m ? parseInt(m[1], 10) : null;
   }
-  function pdfObjStr(data, offsets, num) {
-    const off = offsets[num]; if (off == null) return null;
-    // 既定は 4KB 窓（小さな辞書はこれで完結）。最初の 4KB に endobj が無ければ巨大辞書
-    // （大量の Resources を持ち末尾に /PieceInfo<</Illustrator …>> が来る .ai 等）とみなし、
-    // endobj まで（上限 256KB）窓を広げて辞書全体を確実に含める（/PieceInfo 取りこぼし防止）。
-    let end = Math.min(data.length, off + 4096);
-    if (indexOf(data, b("endobj"), off, end) < 0) {
-      const cap = Math.min(data.length, off + 256 * 1024);
-      const e = indexOf(data, b("endobj"), off, cap);
-      end = e >= 0 ? Math.min(cap, e + 6) : cap;
+  function pdfObjStr(data, offsets, num, compressedObjs) {
+    const off = offsets[num];
+    if (off != null) {
+      // 既定は 4KB 窓（小さな辞書はこれで完結）。最初の 4KB に endobj が無ければ巨大辞書
+      // （大量の Resources を持ち末尾に /PieceInfo<</Illustrator …>> が来る .ai 等）とみなし、
+      // endobj まで（上限 256KB）窓を広げて辞書全体を確実に含める（/PieceInfo 取りこぼし防止）。
+      let end = Math.min(data.length, off + 4096);
+      if (indexOf(data, b("endobj"), off, end) < 0) {
+        const cap = Math.min(data.length, off + 256 * 1024);
+        const e = indexOf(data, b("endobj"), off, cap);
+        end = e >= 0 ? Math.min(cap, e + 6) : cap;
+      }
+      const s = latin1(data, off, end);
+      return s.startsWith(num + " 0 obj") ? s : null;
     }
-    const s = latin1(data, off, end);
-    return s.startsWith(num + " 0 obj") ? s : null;
+    // 非圧縮テーブルに無い → ObjStm 内の圧縮オブジェクト（parsePDFXref で展開済み）から解決。
+    // 取り出した本体は "N 0 obj" 接頭辞を持たないが、呼び出し側は辞書内をパターン検索するだけなので問題ない。
+    if (compressedObjs && compressedObjs[num] != null) return compressedObjs[num];
+    return null;
   }
 
-  function parsePDFXref(data) {
+  // Catalog → Pages → Page[0] の辞書を解決して返す（構造的に読めなければ null）。
+  // 読めれば /Illustrator・/AdobePhotoshop の有無をその場で判定でき、無ければ確定でプレーンPDF
+  // → プレーンPDFのたびに全走査（indexOf /AIMetaData）する必要がなくなる。compressedObjs で ObjStm も辿る。
+  function firstPageDict(data, root, offsets, compressedObjs) {
+    const catStr = pdfObjStr(data, offsets, root, compressedObjs); if (!catStr) return null;
+    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return null;
+    const pagesStr = pdfObjStr(data, offsets, pagesN, compressedObjs); if (!pagesStr) return null;
+    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return null;
+    return pdfObjStr(data, offsets, pageN, compressedObjs);
+  }
+
+  // /Key [ n1 n2 … ]（W や Index）の整数配列
+  function pdfIntArray(key, s) {
+    const re = new RegExp("/" + key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*\\[([^\\]]*)\\]");
+    const m = s.match(re);
+    if (!m) return null;
+    const nums = m[1].split(/\s+/).filter(Boolean).map(Number).filter(n => !isNaN(n));
+    return nums.length ? nums : null;
+  }
+
+  // PDF プレディクタ（PNG, Predictor 10〜15）解除。入力は「1Bフィルタタイプ + columns B」を1行とする。
+  function applyPNGPredictor(data, columns) {
+    if (columns <= 0) return null;
+    const bpp = 1, rowLen = columns + 1;
+    if (data.length < rowLen) return null;
+    const rows = Math.floor(data.length / rowLen);
+    const out = new Uint8Array(rows * columns);
+    let prev = new Uint8Array(columns);
+    for (let r = 0; r < rows; r++) {
+      const base = r * rowLen, ft = data[base];
+      const cur = new Uint8Array(columns);
+      for (let k = 0; k < columns; k++) cur[k] = data[base + 1 + k];
+      if (ft === 1) { for (let k = bpp; k < columns; k++) cur[k] = (cur[k] + cur[k - bpp]) & 0xff; }
+      else if (ft === 2) { for (let k = 0; k < columns; k++) cur[k] = (cur[k] + prev[k]) & 0xff; }
+      else if (ft === 3) { for (let k = 0; k < columns; k++) { const left = k >= bpp ? cur[k - bpp] : 0; cur[k] = (cur[k] + ((left + prev[k]) >> 1)) & 0xff; } }
+      else if (ft === 4) { for (let k = 0; k < columns; k++) { const a = k >= bpp ? cur[k - bpp] : 0, bb = prev[k], c = k >= bpp ? prev[k - bpp] : 0; const pp = a + bb - c, pa = Math.abs(pp - a), pb = Math.abs(pp - bb), pc = Math.abs(pp - c); const pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? bb : c); cur[k] = (cur[k] + pr) & 0xff; } }
+      else if (ft !== 0) return null;
+      out.set(cur, r * columns);
+      prev = cur;
+    }
+    return out;
+  }
+
+  // 相互参照ストリーム（PDF 1.5+ の圧縮 xref。/Type /XRef）1 セクションを解析。
+  // type1=非圧縮（offsets にオフセット）、type2=ObjStm 内の圧縮オブジェクト（compressed に {stm,idx}）。
+  async function parseXrefStreamSection(data, off, offsets, compressed, ctx) {
+    const si = indexOf(data, b("stream"), off, Math.min(data.length, off + 65536));
+    if (si < 0) return;
+    const dict = latin1(data, off, si);
+    const W = pdfIntArray("W", dict);
+    if (!W || W.length < 3 || W[0] < 0 || W[1] < 0 || W[2] < 0) return;
+    const rowLen = W[0] + W[1] + W[2];
+    if (rowLen <= 0) return;
+    const size = pdfIntVal("Size", dict) || 0;
+    const index = pdfIntArray("Index", dict) || [0, size];
+    if (index.length < 2) return;
+    if (ctx.root == null) ctx.root = pdfObjRef("Root", dict);
+    const prev = pdfIntVal("Prev", dict);
+    if (prev != null) ctx.queue.push(prev);
+
+    const length = pdfIntVal("Length", dict);
+    if (!(length > 0)) return;
+    let rel = si + "stream".length - off;
+    if (data[off + rel] === 0x0D) rel++;
+    if (data[off + rel] === 0x0A) rel++;
+    const bodyOff = off + rel;
+    if (bodyOff + length > data.length) return;
+    const raw = data.subarray(bodyOff, bodyOff + length);
+    let dec = dict.includes("/FlateDecode") ? await inflate(raw, false) : raw;
+    if (!dec) return;
+    const predictor = pdfIntVal("Predictor", dict) || 1;
+    if (predictor >= 10) {
+      const columns = pdfIntVal("Columns", dict) || rowLen;
+      dec = applyPNGPredictor(dec, columns);
+      if (!dec) return;
+    }
+    if (dec.length < rowLen) return;
+    const be = (s, n) => { let v = 0; for (let i = 0; i < n; i++) v = v * 256 + dec[s + i]; return v; };
+    const totalRows = Math.floor(dec.length / rowLen);
+    let rowNo = 0;
+    for (let pi = 0; pi + 1 < index.length; pi += 2) {
+      const startObj = index[pi], count = index[pi + 1];
+      for (let k = 0; k < count; k++) {
+        if (rowNo >= totalRows) return;
+        const base = rowNo * rowLen;
+        const type = W[0] === 0 ? 1 : be(base, W[0]);
+        const objNum = startObj + k;
+        if (type === 1) {
+          if (offsets[objNum] == null && compressed[objNum] == null) offsets[objNum] = be(base + W[0], W[1]);
+        } else if (type === 2) {
+          if (offsets[objNum] == null && compressed[objNum] == null)
+            compressed[objNum] = { stm: be(base + W[0], W[1]), idx: be(base + W[0] + W[1], W[2]) };
+        }
+        rowNo++;
+      }
+    }
+  }
+
+  // ObjStm（/Type /ObjStm）を展開してヘッダ（objNum 相対オフセット列）と本体バイトを返す
+  async function objStmDecode(data, offsets, stmNum) {
+    const off = offsets[stmNum]; if (off == null) return null;
+    const header = latin1(data, off, Math.min(data.length, off + 8192));
+    const si = header.indexOf("stream"); if (si < 0) return null;
+    const dict = header.slice(0, si);
+    if (!dict.includes("/ObjStm")) return null;
+    const fm = dict.match(/\/First\s+(\d+)/); if (!fm) return null;
+    const first = parseInt(fm[1], 10);
+    const inflated = await readPDFObjStream(data, offsets, stmNum);
+    if (!inflated || !(first > 0) || first > inflated.length) return null;
+    const headerNums = latin1(inflated, 0, first).split(/\s+/).filter(Boolean).map(Number);
+    return { first, bytes: inflated, headerNums };
+  }
+
+  async function parsePDFXref(data) {
     const fileSize = data.length;
     if (fileSize === 0) return null;
     const tail = latin1(data, Math.max(0, fileSize - 1024), fileSize);
@@ -483,21 +616,29 @@ const Ai = (() => {
     if (xrefOff == null) return null;
 
     const offsets = {};
-    let root = null;
-    const queue = [xrefOff];
+    const compressed = {};           // objNum → { stm, idx }（ObjStm 内の圧縮オブジェクト）
+    const ctx = { root: null, queue: [xrefOff] };
     const seen = new Set();
 
-    while (queue.length) {
-      const off = queue.shift();
+    while (ctx.queue.length) {
+      const off = ctx.queue.shift();
       if (seen.has(off)) continue;
       seen.add(off);
       if (off < 0 || off >= fileSize) continue;
+
+      // クラシック相互参照テーブル（"xref" 始まり）か相互参照ストリーム（"N G obj" 始まり）かを先頭で判別
+      const peek = latin1(data, off, Math.min(fileSize, off + 16)).trim();
+      if (!peek.startsWith("xref")) {
+        // PDF 1.5+ の相互参照ストリーム
+        await parseXrefStreamSection(data, off, offsets, compressed, ctx);
+        continue;
+      }
 
       // off から 'trailer' までを取り出す
       const tIdx = indexOf(data, b("trailer"), off, fileSize);
       const regionEnd = tIdx >= 0 ? Math.min(fileSize, tIdx + 2048) : Math.min(fileSize, off + 65536);
       const s = latin1(data, off, regionEnd);
-      if (!s.startsWith("xref")) continue; // xref ストリーム形式は未対応
+      if (!s.startsWith("xref")) continue;
 
       const sNorm = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
       const rows = sNorm.split("\n");
@@ -516,7 +657,7 @@ const Ai = (() => {
           const ep = rows[p++].trim().split(/\s+/).filter(Boolean);
           if (ep.length >= 3 && ep[2] === "n") {
             const fileOff = parseInt(ep[0], 10);
-            if (!isNaN(fileOff)) offsets[objID] = fileOff;
+            if (!isNaN(fileOff) && offsets[objID] == null) offsets[objID] = fileOff;
           }
           objID++;
         }
@@ -524,24 +665,45 @@ const Ai = (() => {
       const trailerPos = s.indexOf("trailer");
       if (trailerPos >= 0) {
         const ts = s.slice(trailerPos + "trailer".length);
-        if (root == null) root = pdfObjRef("Root", ts);
+        if (ctx.root == null) ctx.root = pdfObjRef("Root", ts);
         const prev = pdfIntVal("Prev", ts);
-        if (prev != null) queue.push(prev);
+        if (prev != null) ctx.queue.push(prev);
+        const xstm = pdfIntVal("XRefStm", ts);   // ハイブリッド参照
+        if (xstm != null) ctx.queue.push(xstm);
       }
     }
-    return root == null ? null : { root, offsets };
+    if (ctx.root == null) return null;
+
+    // type2（圧縮オブジェクト）を ObjStm から展開して dict 文字列に解決しておく
+    // （こうしておけば pdfObjStr は同期のまま offsets / compressedObjs を引くだけで済む）。
+    const compressedObjs = {};
+    const byStm = {};
+    for (const [objNumStr, loc] of Object.entries(compressed)) {
+      (byStm[loc.stm] = byStm[loc.stm] || []).push({ obj: parseInt(objNumStr, 10), idx: loc.idx });
+    }
+    for (const stmStr of Object.keys(byStm)) {
+      const body = await objStmDecode(data, offsets, parseInt(stmStr, 10));
+      if (!body) continue;
+      const { first, bytes, headerNums } = body;
+      for (const { obj, idx } of byStm[stmStr]) {
+        const offPos = idx * 2 + 1;
+        if (offPos >= headerNums.length) continue;
+        const startRel = headerNums[offPos];
+        const endRel = (offPos + 2 < headerNums.length) ? headerNums[offPos + 2] : (bytes.length - first);
+        const start = first + startRel, end = Math.min(first + endRel, bytes.length);
+        if (start >= 0 && start <= end && end <= bytes.length) compressedObjs[obj] = latin1(bytes, start, end);
+      }
+    }
+
+    return { root: ctx.root, offsets, compressedObjs };
   }
 
-  function traverseToAIMetaDataObj(data, root, offsets) {
-    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return null;
-    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return null;
-    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return null;
-    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return null;
-    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return null;
+  function traverseToAIMetaDataObj(data, root, offsets, compressedObjs) {
+    const pageStr = firstPageDict(data, root, offsets, compressedObjs); if (!pageStr) return null;
     const illusN = pdfObjRef("Illustrator", pageStr); if (illusN == null) return null;
-    const illusStr = pdfObjStr(data, offsets, illusN); if (!illusStr) return null;
+    const illusStr = pdfObjStr(data, offsets, illusN, compressedObjs); if (!illusStr) return null;
     const privN = pdfObjRef("Private", illusStr); if (privN == null) return null;
-    const privStr = pdfObjStr(data, offsets, privN); if (!privStr) return null;
+    const privStr = pdfObjStr(data, offsets, privN, compressedObjs); if (!privStr) return null;
     return pdfObjRef("AIMetaData", privStr);
   }
 
@@ -561,37 +723,22 @@ const Ai = (() => {
     return hasFilter ? await inflate(raw, false) : raw;
   }
 
-  // Page → /PieceInfo に /AdobePhotoshop があるか（Photoshop編集機能保持PDF判定）。
-  // Illustrator編集PDF（/PieceInfo/Illustrator）と同じ機構の Photoshop 版。
-  function pdfPageHasAdobePhotoshop(data, root, offsets) {
-    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return false;
-    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return false;
-    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return false;
-    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return false;
-    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return false;
-    return pageStr.includes("/AdobePhotoshop");
-  }
-
   // Photoshop編集機能保持PDF の埋め込みデータから psVersion を取得する。
   // Page → /PieceInfo /AdobePhotoshop << … /Private N 0 R >> → /StandardImageFileData（FlateDecode）→ cinf。
   // /AdobePhotoshop はインライン辞書のため、その直後の /Private 参照を拾う。
-  async function psVersionFromPhotoshopPDF(data, root, offsets) {
-    const catStr = pdfObjStr(data, offsets, root); if (!catStr) return "";
-    const pagesN = pdfObjRef("Pages", catStr); if (pagesN == null) return "";
-    const pagesStr = pdfObjStr(data, offsets, pagesN); if (!pagesStr) return "";
-    const pageN = pdfFirstKid(pagesStr); if (pageN == null) return "";
-    const pageStr = pdfObjStr(data, offsets, pageN); if (!pageStr) return "";
+  async function psVersionFromPhotoshopPDF(data, root, offsets, compressedObjs) {
+    const pageStr = firstPageDict(data, root, offsets, compressedObjs); if (!pageStr) return "";
     const ap = pageStr.indexOf("/AdobePhotoshop"); if (ap < 0) return "";
     const afterAP = pageStr.slice(ap + "/AdobePhotoshop".length);
     const privN = pdfObjRef("Private", afterAP); if (privN == null) return "";
-    const privStr = pdfObjStr(data, offsets, privN); if (!privStr) return "";
+    const privStr = pdfObjStr(data, offsets, privN, compressedObjs); if (!privStr) return "";
     const dataN = pdfObjRef("StandardImageFileData", privStr); if (dataN == null) return "";
     const inflated = await readPDFObjStream(data, offsets, dataN); if (!inflated) return "";
     return parsePsVersionFromCinf(inflated);
   }
 
   async function aiMetaDataStream(data, xref) {
-    const metaN = traverseToAIMetaDataObj(data, xref.root, xref.offsets);
+    const metaN = traverseToAIMetaDataObj(data, xref.root, xref.offsets, xref.compressedObjs);
     if (metaN == null) return null;
     return await readPDFObjStream(data, xref.offsets, metaN);
   }
@@ -622,7 +769,7 @@ const Ai = (() => {
   }
 
   function getCreatorToolViaXref(data, xref) {
-    const catStr = pdfObjStr(data, xref.offsets, xref.root); if (!catStr) return "";
+    const catStr = pdfObjStr(data, xref.offsets, xref.root, xref.compressedObjs); if (!catStr) return "";
     const metaN = pdfObjRef("Metadata", catStr); if (metaN == null) return "";
     const metaOff = xref.offsets[metaN]; if (metaOff == null) return "";
     const header = latin1(data, metaOff, Math.min(data.length, metaOff + 512));
@@ -794,7 +941,7 @@ const Ai = (() => {
       xmpCreatorTool: "", creator1: "", creator2: "", ai8CreatorVersion: "",
       hasCreator2: true, determineCreated: "", determineSaved: "", isSavedLowerVersion: false
     };
-    const pdfXref = isPDFBased(data) ? parsePDFXref(data) : null;
+    const pdfXref = isPDFBased(data) ? await parsePDFXref(data) : null;
 
     fc.kind = getFileKind(fc, data, pdfXref, simple);
 
@@ -825,7 +972,7 @@ const Ai = (() => {
 
     // Photoshop編集機能保持PDF: 埋め込み StandardImageFileData の cinf からバージョン取得（表示専用）
     if (fc.isPhotoshopEditablePDF && pdfXref) {
-      fc.psVersion = (await psVersionFromPhotoshopPDF(data, pdfXref.root, pdfXref.offsets)) || "";
+      fc.psVersion = (await psVersionFromPhotoshopPDF(data, pdfXref.root, pdfXref.offsets, pdfXref.compressedObjs)) || "";
     }
 
     return fc;
@@ -1294,7 +1441,7 @@ function aiKindText(fc) {
       if (fc.isPhotoshopEditablePDF) return "PDF（Photoshop編集機能あり）";
       return fc.isIllustratorFile
         ? "PDF（Illustrator編集機能あり）"
-        : "PDF（Illustrator編集機能なし）";
+        : "PDF書類";
     case "Ai":
       return fc.isTemplate ? "Illustrator テンプレート形式（.ait）" : "Adobe Illustrator 形式（.ai）";
     case "EPS":
@@ -1308,6 +1455,12 @@ function aiKindText(fc) {
     default:
       return "";
   }
+}
+
+// 種類列が赤文字（拡張子偽装 mismatch）でないときは、末尾の「（.拡張子）」表記を省く。
+// 「（Illustrator編集機能あり）」のような拡張子以外の括弧書きは、先頭ドットが無いため対象外。
+function stripExtSuffix(kind, mismatch) {
+  return mismatch ? kind : kind.replace(/（\.[^（）]*）$/, "");
 }
 
 /* ===========================================================================
@@ -1365,6 +1518,7 @@ async function analyze(file) {
     if (versionDetail === "simple") version = truncateToMinor(version);
     let kind = r.contentKind ? Id.kindText(r.contentKind) : "";
     if (!kind && !r.isValid) kind = "—";
+    kind = stripExtSuffix(kind, r.isExtMismatch);
     return {
       name, version, kind,
       app: r.isValid ? "id" : "none",
@@ -1404,6 +1558,7 @@ async function analyze(file) {
   }
   const mismatch = expected.length > 0 && ext !== "" && !expected.includes(ext);
 
+  kind = stripExtSuffix(kind, mismatch);
   if (!kind) kind = "対応していないファイル";
 
   return {
@@ -1492,6 +1647,12 @@ function bumpAnalyze() { analyzedCount++; }
 function errRow(name, e) {
   return { name, version: e ? "解析エラー: " + ((e && e.message) || e) : "読み込めませんでした",
            kind: "—", app: "none", dim: true, mismatch: false };
+}
+
+// 解析がまだ済んでいない暫定行（フォルダ展開直後など）。読み取り失敗（errRow）とは区別し、
+// バージョン列に「読み込めませんでした」ではなく「判定中…」を出す（誤解防止）。
+function pendingRow(name) {
+  return { name, version: "判定中…", kind: "—", app: "none", dim: true, mismatch: false };
 }
 
 /* ---- 同時実行制限 ---- */
@@ -1731,7 +1892,7 @@ function renderChildren(node, depth, frag) {
   const dirs = node.children.filter(c => c.type === "dir").sort(compareDirNodes);
   const files = node.children.filter(c => c.type === "file").sort(compareFileNodes);
   for (const d of dirs) { appendDirRow(d, depth, frag); if (expanded.has(d.path)) renderChildren(d, depth + 1, frag); }
-  for (const f of files) frag.appendChild(makeFileRow(f.row || errRow(baseName(f.path)), true, depth));
+  for (const f of files) frag.appendChild(makeFileRow(f.row || pendingRow(baseName(f.path)), true, depth));
 }
 function countAllFiles(node) { let n = 0; for (const c of node.children) n += c.type === "file" ? 1 : countAllFiles(c); return n; }
 
