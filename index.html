@@ -237,7 +237,7 @@
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.6</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.7</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -1164,12 +1164,15 @@ const Id = (() => {
     return [start, pos];
   }
 
-  function readTS6(data, start, hi) {
-    let v = 0n;
-    for (let i = 0; i < 6; i++) {
+  // バージョン文字列直後 +2..+5 の 4 バイトを LE u32 として読む（hi で打ち切り）。
+  // 採用比較で使うのは旧 ts6 の (>>16)&0xFFFFFFFF＝この 32bit のみなので、低速な BigInt を
+  // 介さず通常の Number で扱う（ヒット毎の BigInt 確保・演算が走査の主要コストだった）。
+  function readTS32(data, start, hi) {
+    let v = 0;
+    for (let i = 2; i < 6; i++) {
       const idx = start + i;
       if (idx >= hi) break;
-      v |= BigInt(data[idx]) << BigInt(i * 8);
+      v += data[idx] * (1 << ((i - 2) * 8)); // i=5 は <<24 が符号付きになるため乗算で組む
     }
     return v;
   }
@@ -1208,18 +1211,22 @@ const Id = (() => {
       const chunkEnd = chunkStart + blockSize;
       if (chunkEnd > data.length) continue;
 
+      // ブロック内のドット探索はネイティブ Uint8Array.indexOf（C++/SIMD）に委ねる。
+      // 自前 indexOf の総当たり＋毎回の [0x2E] 確保を排除。subarray は buffer 共有の O(1) ビュー。
+      const blk = data.subarray(chunkStart, chunkEnd);
       let from = chunkStart;
       while (true) {
-        const pos = indexOf(data, [0x2E], from, chunkEnd);
-        if (pos < 0) break;
+        const rel = blk.indexOf(0x2E, from - chunkStart);
+        if (rel < 0) break;
+        const pos = chunkStart + rel;
         const vr = versionRange(data, pos, chunkStart, chunkEnd);
         if (vr && startsWith(data, vr[0], prefixBytes)) {
           const ver = latin1(data, vr[0], vr[1]);
           const globalOffset = vr[0];
           const afterEnd = Math.min(vr[1] + 24, chunkEnd);
-          const ts6 = readTS6(data, vr[1], chunkEnd);
-          if (hasSentinel(data, vr[1], afterEnd)) sentinelHits.push({ globalOffset, ver, ts6 });
-          lastHits.push({ globalOffset, ver, ts6 });
+          const ts32 = readTS32(data, vr[1], chunkEnd);
+          if (hasSentinel(data, vr[1], afterEnd)) sentinelHits.push({ globalOffset, ver, ts32 });
+          lastHits.push({ globalOffset, ver, ts32 });
           from = vr[1];
         } else {
           from = pos + 1;
@@ -1232,10 +1239,8 @@ const Id = (() => {
       let best = null;
       for (const e of arr) {
         if (best === null) { best = e; continue; }
-        const a32 = (e.ts6 >> 16n) & 0xFFFFFFFFn;
-        const b32 = (best.ts6 >> 16n) & 0xFFFFFFFFn;
         let greater;
-        if (a32 !== b32) greater = a32 > b32;
+        if (e.ts32 !== best.ts32) greater = e.ts32 > best.ts32;
         else greater = e.globalOffset > best.globalOffset;
         if (greater) best = e;
       }
