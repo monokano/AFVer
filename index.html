@@ -237,7 +237,7 @@
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.7</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.8</a>
 </footer>
 
 <div id="drop-overlay">ドロップして判定</div>
@@ -1575,6 +1575,28 @@ async function analyze(file) {
   };
 }
 
+/* ---- バージョン結果キャッシュ（再ドロップ・精度トグルでの再解析を回避） ----
+ * Desktop 版の VersionCacheKey（パス＋変更日＋サイズ＋精度）を Web へ移植。File にはパスが
+ * 無いため name + size + lastModified + 精度 をキーにする（別フォルダの同名・同サイズ・同更新
+ * 日時の衝突は理論上ありうるが実害は小さい）。プロセス（タブ）内のみ・永続化なし。「クリア」では
+ * 消さない＝同一ファイル再ドロップを即時化するため。詳細⇔簡易の往復は別キーで両方が残り即時復元。
+ * 返す行は毎回シャローコピー：呼び出し側が r.name = path 等で書き換えてもキャッシュ本体を汚さない。
+ */
+const versionCache = new Map();
+function versionCacheKey(file) {
+  // 自由長の name を末尾に置けば、size / lastModified / 精度（いずれも区切り ":" を含まない）で
+  // 境界が一意に決まり、名前に何が含まれても衝突しない。NUL 等の制御文字を使わずに済む。
+  return file.size + ":" + (file.lastModified || 0) + ":" + versionDetail + ":" + file.name;
+}
+async function analyzeCached(file) {
+  const key = versionCacheKey(file);
+  const hit = versionCache.get(key);
+  if (hit) return { ...hit };
+  const r = await analyze(file);   // 例外時は何もキャッシュしない（呼び出し側が errRow 化）
+  versionCache.set(key, r);        // 本体を保持し、呼び出し側には常にコピーを返す
+  return { ...r };
+}
+
 /* ===========================================================================
  *  UI（遅延ロード対応ツリー）
  * ==========================================================================*/
@@ -1727,7 +1749,7 @@ async function ensureFolderAnalyzed(node) {
   if (pending.length) {
     await mapLimit(pending, 8, async (fn) => {
       let r;
-      try { const file = await fn.getFile(); r = file ? await analyze(file) : errRow(baseName(fn.path)); }
+      try { const file = await fn.getFile(); r = file ? await analyzeCached(file) : errRow(baseName(fn.path)); }
       catch (e) { r = errRow(baseName(fn.path), e); }
       r.name = fn.path; fn.row = r; fn.analyzed = true; bumpAnalyze();
     });
@@ -1817,7 +1839,7 @@ async function handleFiles(fileList) {
   startAnalyze(); render();
   const out = [];
   await mapLimit(files, 8, async (f) => {
-    let r; try { r = await analyze(f); } catch (e) { r = errRow(f.name, e); }
+    let r; try { r = await analyzeCached(f); } catch (e) { r = errRow(f.name, e); }
     bumpAnalyze(); out.push(r);
   });
   rows = out;
