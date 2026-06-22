@@ -1,6 +1,6 @@
 # AFVer-Web — Adobe File Version
 
-Illustrator・Photoshop・InDesignのファイルをブラウザのウィンドウにドロップすると、**作成バージョン**を判定して一覧表示するWebアプリです。フォルダのドロップにも対応しています。
+InDesign / Illustrator のファイルをブラウザのウィンドウにドロップすると、**作成バージョン**を検出して一覧表示するWebアプリです。フォルダのドロップにも対応しています。
 
 - **単一HTMLで完結** — `index.html` の1ファイルだけ。
 - **外部ライブラリ不使用・完全オフライン** — ファイルはサーバーに送信されません。すべてブラウザ内で解析します。
@@ -19,11 +19,9 @@ Illustrator・Photoshop・InDesignのファイルをブラウザのウィンド�
 
 | 系統 | 形式 |
 | --- | --- |
+| InDesign 系 | `.indd` `.indt` `.indb` `.indl` `.idml` |
 | Illustrator 系 | `.ai` `.ait` `.eps` `.pdf`  |
 | Photoshop 系 | `.psd` `.psb` `.eps` `.pdf` |
-| InDesign 系 | `.indd` `.indt` `.indb` `.indl` `.idml` |
-
-判定ロジックは、移植元のmacOSアプリ（File Ver Ai / File Ver Id）のロジックを忠実に移植したものです。
 
 ## 機能
 

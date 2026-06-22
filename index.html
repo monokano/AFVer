@@ -194,7 +194,7 @@
 <body>
 <header>
   <h1>AFVer-Web</h1>
-  <span class="sub">Illustrator / InDesign ファイルの作成バージョンを判定</span>
+  <span class="sub">Illustrator / InDesign ファイルの作成バージョンを検出</span>
   <span class="spacer"></span>
   <div class="menu-wrap">
     <button id="btn-open">開く…</button>
@@ -237,10 +237,10 @@
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.8</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.9</a>
 </footer>
 
-<div id="drop-overlay">ドロップして判定</div>
+<div id="drop-overlay">ドロップして検出</div>
 
 <input type="file" id="file-input" multiple style="display:none"
        accept=".ai,.ait,.eps,.pdf,.psd,.psb,.indd,.indt,.indb,.indl,.idml">
@@ -971,7 +971,9 @@ const Ai = (() => {
     else if (isPhotoshopFile(data, fc.kind) || fc.isPhotoshopEditablePDF || fc.xmpCreatorTool.includes("Photoshop")) fc.appName = "Photoshop";
 
     // Photoshop編集機能保持PDF: 埋め込み StandardImageFileData の cinf からバージョン取得（表示専用）
-    if (fc.isPhotoshopEditablePDF && pdfXref) {
+    // 簡易モードでは Photoshop ネイティブ版検出（cinf 由来）をスキップする。埋め込みストリームの
+    // FlateDecode 解凍を伴い重いため。PSD/PSB と揃える（EPS の %%Creator は軽いので対象外＝常時検出）。
+    if (fc.isPhotoshopEditablePDF && pdfXref && !simple) {
       fc.psVersion = (await psVersionFromPhotoshopPDF(data, pdfXref.root, pdfXref.offsets, pdfXref.compressedObjs)) || "";
     }
 
@@ -1424,11 +1426,11 @@ const Id = (() => {
 
   function kindText(contentKind) {
     switch (contentKind) {
-      case "indd": return "InDesign ドキュメント（.indd）";
-      case "indt": return "InDesign テンプレート（.indt）";
-      case "indl": return "InDesign ライブラリ（.indl）";
-      case "indb": return "InDesign ブック（.indb）";
-      case "idml": return "InDesign マークアップ（.idml）";
+      case "indd": return "InDesign ドキュメント (.indd)";
+      case "indt": return "InDesign テンプレート (.indt)";
+      case "indl": return "InDesign ライブラリ (.indl)";
+      case "indb": return "InDesign ブック (.indb)";
+      case "idml": return "InDesign マークアップ (.idml)";
       default: return "";
     }
   }
@@ -1443,29 +1445,30 @@ function aiKindText(fc) {
   const isPhotoshop = (fc.appName === "Photoshop");
   switch (fc.kind) {
     case "PDF":
-      if (fc.isPhotoshopEditablePDF) return "PDF（Photoshop編集機能あり）";
+      if (fc.isPhotoshopEditablePDF) return "PDF - Photoshop 編集機能保持 (.pdf)";
       return fc.isIllustratorFile
-        ? "PDF（Illustrator編集機能あり）"
-        : "PDF書類";
+        ? "PDF - Illustrator 編集機能保持 (.pdf)"
+        : "PDF - 編集機能なし (Ai, Ps) (.pdf)";
     case "Ai":
-      return fc.isTemplate ? "Illustrator テンプレート形式（.ait）" : "Adobe Illustrator 形式（.ai）";
+      return fc.isTemplate ? "Illustrator Template 形式 (.ait)" : "Illustrator 形式 (.ai)";
     case "EPS":
-      if (fc.isIllustratorFile) return "Illustrator EPS 形式（.eps）";
-      if (isPhotoshop) return "Photoshop EPS 形式（.eps）";
+      if (fc.isIllustratorFile) return "Illustrator EPS 形式 (.eps)";
+      if (isPhotoshop) return "Photoshop EPS 形式 (.eps)";
       return "不明";
     case "PSD":
-      return "Photoshop 形式（.psd）";
+      return "Photoshop 形式 (.psd)";
     case "PSB":
-      return "ビッグドキュメント形式（.psb）";
+      return "ビッグドキュメント形式 (.psb)";
     default:
       return "";
   }
 }
 
-// 種類列が赤文字（拡張子偽装 mismatch）でないときは、末尾の「（.拡張子）」表記を省く。
-// 「（Illustrator編集機能あり）」のような拡張子以外の括弧書きは、先頭ドットが無いため対象外。
+// 種類列が赤文字（拡張子偽装 mismatch）でないときは、末尾の " (.拡張子)" 表記を省く。
+// デスクトップ版 AFVer の displayKind（FileItem.strippingTrailingExtension）と同型の半角括弧正規表現。
+// 「(Ai, Ps)」のような先頭ドットの無い括弧書きは対象外（末尾の " (.pdf)" だけを取り除く）。
 function stripExtSuffix(kind, mismatch) {
-  return mismatch ? kind : kind.replace(/（\.[^（）]*）$/, "");
+  return mismatch ? kind : kind.replace(/\s*\(\.[A-Za-z0-9]+\)\s*$/, "");
 }
 
 /* ===========================================================================
@@ -1537,8 +1540,10 @@ async function analyze(file) {
   const fc = await Ai.parse(name, data, versionDetail === "simple");
 
   // Photoshop バージョン取得（表示専用）: PSD/PSB は file.slice でシーク、EPS は既読 data から
+  // 簡易モードでは PSD/PSB の cinf 走査をスキップ（重い経路。cinf を持たない 2019 以前は全走査して
+  // 結局 nil）。編集機能保持PDF も Ai.parse 内で簡易時スキップ済み。EPS の %%Creator は軽いので常時。
   if (fc.appName === "Photoshop") {
-    if (fc.kind === "PSD" || fc.kind === "PSB") fc.psVersion = await Ai.psVersionFromCinf(file);
+    if ((fc.kind === "PSD" || fc.kind === "PSB") && versionDetail !== "simple") fc.psVersion = await Ai.psVersionFromCinf(file);
     else if (fc.kind === "EPS") fc.psVersion = Ai.psVersionFromEPSCreator(data);
   }
 
