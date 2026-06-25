@@ -79,6 +79,7 @@
   .vdot.ps { background: #31A8FF; }   /* Photoshop */
   .vdot.id { background: #FF3366; }   /* InDesign */
   .vdot.pdf { background: #8a8f98; }  /* PDF（native data 有無に関わらずグレー） */
+  .vdot.eps-other { background: transparent; border: 1.5px solid #8a8f98; box-sizing: border-box; }  /* generic EPS（中空リング・PDFの塗り●と区別） */
   td.col-kind { width: 33%; }
   .badge {
     display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
@@ -90,6 +91,7 @@
   .badge.pdf    { background: #ffffff; color: #e2231a; border: 1px solid #e2231a; }
   .badge.eps-ai { background: #ff9a00; color: #000000; } /* Illustrator EPS */
   .badge.eps-ps { background: #31a8ff; color: #ffffff; } /* Photoshop EPS */
+  .badge.eps-other { background: #ffffff; color: #444444; border: 1px solid #aaaaaa; } /* generic EPS */
   .badge.none   { background: var(--border); color: var(--text-dim); }
 
   /* 書類（ファイル）アイコン表示：やや縦長の矩形タイル＋中央にアプリ略号 */
@@ -110,6 +112,7 @@
   .ficon.eps-ps { background: #ffffff; color: #444444; border: 1px solid #aaaaaa; font-size: 10px; } /* Photoshop EPS */
   .ficon.eps-ai::after { content: "Ai"; } /* data-lbl（"EPS"）を上書き */
   .ficon.eps-ps::after { content: "Ps"; } /* data-lbl（"EPS"）を上書き */
+  .ficon.eps-other { background: #ffffff; color: #444444; border: 1px solid #aaaaaa; } /* generic EPS（白地・グレー囲み・"EPS"） */
   .ficon.none   { background: #b0b0b0; }                                  /* 非対応・グレー */
   /* ファイルアイコン表示時のみ、ファイル名を下げてアイコンと高さを揃える（アイコンと合わせて全体を2px上げ済み） */
   #tbody.icons-file .fname { position: relative; top: 2px; }
@@ -237,7 +240,7 @@
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.9</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.10</a>
 </footer>
 
 <div id="drop-overlay">ドロップして検出</div>
@@ -368,6 +371,16 @@ const Ai = (() => {
       base = (data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24)) >>> 0;
     }
     return latin1(data, base, Math.min(data.length, base + length));
+  }
+  // EPS の PS ヘッダ（先頭16KB）から %%Creator 行の値を抽出（生成元の表示用）。
+  // 例: "%%Creator: GPL Ghostscript 923 (eps2write)" → "GPL Ghostscript 923 (eps2write)"
+  function epsCreatorLine(data) {
+    const m = epsReadPSHeader(data, 16384).match(/%%Creator:[ \t]*(.+)/);
+    if (!m) return "";
+    let value = m[1].trim();
+    // PS 文字列形式 "(value)" の外側カッコ除去（内側カッコ eps2write 等は保持）。
+    if (value.startsWith("(") && value.endsWith(")")) value = value.slice(1, -1);
+    return value;
   }
   function epsIsPhotoshop(data) {
     return epsReadPSHeader(data, 16384).includes("%%Creator: Adobe Photoshop");
@@ -977,6 +990,12 @@ const Ai = (() => {
       fc.psVersion = (await psVersionFromPhotoshopPDF(data, pdfXref.root, pdfXref.offsets, pdfXref.compressedObjs)) || "";
     }
 
+    // Illustrator/Photoshop いずれでもない EPS は最初の %%Creator（生成元）を creator1 にセット。
+    // isIllustratorFile=false では版数スキャンが走らないため、既読16KBヘッダから1行抽出して補う。
+    if (fc.kind === "EPS" && !fc.isIllustratorFile && fc.appName !== "Photoshop") {
+      fc.creator1 = epsCreatorLine(data) || "";
+    }
+
     return fc;
   }
 
@@ -1454,7 +1473,8 @@ function aiKindText(fc) {
     case "EPS":
       if (fc.isIllustratorFile) return "Illustrator EPS 形式 (.eps)";
       if (isPhotoshop) return "Photoshop EPS 形式 (.eps)";
-      return "不明";
+      // Illustrator/Photoshop いずれでもない EPS。生成元（creator1）を畳み込む。空なら「生成元不明」。
+      return "EPS 形式 - " + (fc.creator1 ? fc.creator1 : "生成元不明") + " (.eps)";
     case "PSD":
       return "Photoshop 形式 (.psd)";
     case "PSB":
@@ -1554,6 +1574,7 @@ async function analyze(file) {
   if (fc.kind === "PDF") app = "pdf";                          // 種類PDFは PDF アイコン（編集機能の有無を問わず）
   else if (fc.kind === "EPS" && fc.appName === "Illustrator") app = "eps-ai"; // Illustrator EPS 専用アイコン
   else if (fc.kind === "EPS" && fc.appName === "Photoshop")   app = "eps-ps"; // Photoshop EPS 専用アイコン
+  else if (fc.kind === "EPS")                                 app = "eps-other"; // Illustrator/Photoshop 以外の EPS（generic）
   else if (fc.appName === "Illustrator") app = "ai";
   else if (fc.appName === "Photoshop") app = "ps";
 
@@ -1566,7 +1587,13 @@ async function analyze(file) {
     case "PSB": expected = ["psb"]; break;
     case "PDF": expected = ["pdf"]; break;
   }
-  const mismatch = expected.length > 0 && ext !== "" && !expected.includes(ext);
+  // 拡張子偽装（実拡張子≠期待）と、generic EPS（Illustrator/Photoshop 以外＝素性不明）を区別する。
+  // 赤くするのは両方だが、ツールチップの理由文（warnNote）は分ける。
+  const realExtMismatch = expected.length > 0 && ext !== "" && !expected.includes(ext);
+  const isGenericEPS = fc.kind === "EPS" && !fc.isIllustratorFile && fc.appName !== "Photoshop";
+  const mismatch = realExtMismatch || isGenericEPS;
+  const warnNote = realExtMismatch ? "（拡張子が内容と一致しません）"
+                 : isGenericEPS ? "（Illustrator・Photoshop以外のEPSです）" : "";
 
   kind = stripExtSuffix(kind, mismatch);
   if (!kind) kind = "対応していないファイル";
@@ -1576,7 +1603,7 @@ async function analyze(file) {
     // グレーアウトは「対応していないファイル（app=none）」のみ。
     // 編集機能なしPDFや拡張子偽装はグレーにせず、注意喚起は種類の赤文字(mismatch)で行う。
     dim: app === "none",
-    mismatch
+    mismatch, warnNote
   };
 }
 
@@ -1631,7 +1658,8 @@ function baseName(name) { const i = name.lastIndexOf("/"); return i < 0 ? name :
 function isDotfile(name) { return baseName(name).startsWith("."); }
 
 const APP_BADGE = { ai: ['ai', 'Ai'], id: ['id', 'Id'], ps: ['ps', 'Ps'], pdf: ['pdf', 'PDF'],
-                    'eps-ai': ['eps-ai', 'EPS'], 'eps-ps': ['eps-ps', 'EPS'], none: ['none', '—'] };
+                    'eps-ai': ['eps-ai', 'EPS'], 'eps-ps': ['eps-ps', 'EPS'],
+                    'eps-other': ['eps-other', 'EPS'], none: ['none', '—'] };
 
 // アイコン表示スタイル（"file"＝書類アイコン / "badge"＝従来バッジ）。選択は記憶。
 // ※ Chrome を file:// で開くと localStorage アクセスが例外を投げるため try/catch で保護する
@@ -1657,6 +1685,7 @@ function verDotFamily(app) {
     case "ps": case "eps-ps": return "ps";
     case "id":  return "id";
     case "pdf": return "pdf";
+    case "eps-other": return "eps-other";
     default:    return "";
   }
 }
@@ -1900,7 +1929,7 @@ function makeFileRow(r, tree, depth) {
   const tdKind = document.createElement("td");
   tdKind.className = "col-kind" + (r.mismatch ? " mismatch" : "");   // 種類のみ赤（拡張子偽装）
   tdKind.textContent = r.kind;
-  tdKind.title = r.kind + (r.mismatch ? "（拡張子が内容と一致しません）" : "");
+  tdKind.title = r.kind + (r.warnNote || "");
   tr.append(tdName, tdVer, tdKind);
   return tr;
 }
