@@ -240,7 +240,7 @@
     <span class="seg-label">精度</span><span class="seg-group"><button type="button" id="detail-full" class="seg">詳細</button><button type="button" id="detail-simple" class="seg">簡易</button></span>
   </span>
   <a href="https://github.com/monokano/AFVer/releases" target="_blank" rel="noopener"
-     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.10</a>
+     style="color:inherit;text-decoration:none;opacity:.6;" id="ver-link">v1.11</a>
 </footer>
 
 <div id="drop-overlay">ドロップして検出</div>
@@ -1185,18 +1185,27 @@ const Id = (() => {
     return [start, pos];
   }
 
-  // バージョン文字列直後 +2..+5 の 4 バイトを LE u32 として読む（hi で打ち切り）。
+  // バージョン文字列直後 +2..+5 の 4 バイトを ts32 として読む（hi で打ち切り、不足分は 0）。
+  // バイト順はファイルのフォーマットに従う（旧フォーマット＝ビッグエンディアン。
+  // 「新旧」は年代でなくエンディアン系譜で、CS/CS2 由来ファイルは現代の InDesign で
+  // 保存し直しても BE のまま引き継がれる）。
   // 採用比較で使うのは旧 ts6 の (>>16)&0xFFFFFFFF＝この 32bit のみなので、低速な BigInt を
   // 介さず通常の Number で扱う（ヒット毎の BigInt 確保・演算が走査の主要コストだった）。
-  function readTS32(data, start, hi) {
+  function readTS32(data, start, hi, bigEndian) {
     let v = 0;
     for (let i = 2; i < 6; i++) {
       const idx = start + i;
       if (idx >= hi) break;
-      v += data[idx] * (1 << ((i - 2) * 8)); // i=5 は <<24 が符号付きになるため乗算で組む
+      const shift = bigEndian ? (5 - i) * 8 : (i - 2) * 8;
+      v += data[idx] * (1 << shift); // shift は最大24で (1<<24) は正。値側の << は符号付きになるため乗算で組む
     }
     return v;
   }
+
+  // ts32 の妥当域。FILETIME hi32（1601 年起算・1 単位 ≈ 7.16 分）として約 1972〜2172 年に
+  // 相当する範囲。範囲外はコンテンツ由来の偽レコード（bid が偶然 8/9 のブロック内のテキスト等）
+  // の疑いとして、妥当なレコードが 1 件も無いときだけ採用対象にする。
+  const TS32_PLAUSIBLE_MIN = 0x01A00000, TS32_PLAUSIBLE_MAX = 0x02800000;
   function hasSentinel(data, lo, hi) {
     for (let i = lo; i < hi; i++) {
       if (data[i] === 0x40 && i + 6 < hi) {
@@ -1208,7 +1217,7 @@ const Id = (() => {
     return false;
   }
 
-  function runXref(data, r) {
+  function runXref(data, r, bigEndian) {
     const blockSize = 0x1000;
     const blockCount = Math.floor(data.length / blockSize);
     if (blockCount <= 2) return;
@@ -1245,7 +1254,7 @@ const Id = (() => {
           const ver = latin1(data, vr[0], vr[1]);
           const globalOffset = vr[0];
           const afterEnd = Math.min(vr[1] + 24, chunkEnd);
-          const ts32 = readTS32(data, vr[1], chunkEnd);
+          const ts32 = readTS32(data, vr[1], chunkEnd, bigEndian);
           if (hasSentinel(data, vr[1], afterEnd)) sentinelHits.push({ globalOffset, ver, ts32 });
           lastHits.push({ globalOffset, ver, ts32 });
           from = vr[1];
@@ -1255,10 +1264,13 @@ const Id = (() => {
       }
     }
 
-    // ts32（バージョン直後 +2..+5 を LE u32）主キー、物理オフセット副キーで降順最大を採用
+    // ts32（バージョン直後 +2..+5。バイト順はフォーマットに従う）主キー、
+    // 物理オフセット副キーで降順最大を採用。妥当域内の ts32 を持つレコードがあれば範囲外を除外。
     const pick = (arr) => {
+      let pool = arr.filter((e) => e.ts32 >= TS32_PLAUSIBLE_MIN && e.ts32 <= TS32_PLAUSIBLE_MAX);
+      if (pool.length === 0) pool = arr;
       let best = null;
-      for (const e of arr) {
+      for (const e of pool) {
         if (best === null) { best = e; continue; }
         let greater;
         if (e.ts32 !== best.ts32) greater = e.ts32 > best.ts32;
@@ -1421,7 +1433,7 @@ const Id = (() => {
     r.headerResult = "InDesign " + appName(r.headerMajor, r.headerMinor) + " (" + hVer + ")";
 
     // 簡易：ファイル全体読み込み＋xref 走査を行わず、ヘッダ結果のまま返す
-    if (!headerOnly) runXref(data, r);
+    if (!headerOnly) runXref(data, r, !newFmt);
     return r;
   }
 
